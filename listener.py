@@ -766,6 +766,12 @@ state = {
     "drs":              False,
     "tyre_compound":    None,
     "fuel_remaining_laps": None,
+    "current_lap_time": None,
+    "last_lap_time_s":  None,
+    "tyre_fl":          None,
+    "tyre_fr":          None,
+    "tyre_rl":          None,
+    "tyre_rr":          None,
     "last_packet_at":   None,
     # per-game raw UDP counters (arrive regardless of whether parse succeeds)
     "udp_received": {"forza_motorsport": 0, "acc": 0, "f1": 0},
@@ -803,6 +809,13 @@ def update_state(game: str, session: Session, parsed: dict):
     state["drs"]          = parsed.get("drs", state["drs"])
     state["tyre_compound"]       = parsed.get("tyre_compound", state["tyre_compound"])
     state["fuel_remaining_laps"] = parsed.get("fuel_remaining_laps", state["fuel_remaining_laps"])
+    state["current_lap_time"]    = parsed.get("current_lap_time", state["current_lap_time"])
+    if parsed.get("last_lap_time"):
+        state["last_lap_time_s"] = parsed["last_lap_time"]
+    for corner in ("fl", "fr", "rl", "rr"):
+        v = parsed.get(f"tire_temp_{corner}")
+        if v is not None:
+            state[f"tyre_{corner}"] = round(v, 1)
     state["last_packet_at"]      = datetime.now().isoformat()
 
 # ─── UDP Protocol Handlers ────────────────────────────────────────────────────
@@ -1100,92 +1113,125 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 /* ── topbar ── */
 .tb{flex:none;height:50px;display:flex;align-items:center;padding:0 18px;gap:14px;border-bottom:1px solid #1e1e1e}
 .dot{width:9px;height:9px;border-radius:50%;flex:none;background:#444}
-.dot.receiving{background:#00ff41;box-shadow:0 0 8px #00ff41;animation:p 1s infinite}
-.dot.idle{background:#444}
+.dot.receiving{background:#00ff41;box-shadow:0 0 8px #00ff41;animation:blink 1s infinite}
 .dot.race_ended{background:#f59e0b}
-@keyframes p{0%,100%{opacity:1}50%{opacity:.4}}
-.tb-stat{font-size:.85rem;letter-spacing:2px;text-transform:uppercase;color:#666;min-width:90px}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.tb-stat{font-size:.85rem;letter-spacing:2px;text-transform:uppercase;color:#555;min-width:100px}
 .tb-stat.receiving{color:#00ff41}
 .tb-stat.race_ended{color:#f59e0b}
-.tb-meta{display:flex;gap:18px;flex:1;font-size:.88rem;letter-spacing:1px;overflow:hidden}
-.tb-game{color:#aaa;text-transform:uppercase}
-.tb-track{color:#ccc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.tb-lap{color:#888}
-.tb-best{color:#22c55e}
-.tb-drs{color:#00ff41;font-weight:bold;display:none}
+.tb-meta{display:flex;gap:20px;flex:1;font-size:.88rem;letter-spacing:1px;overflow:hidden}
+.tb-game{color:#888;text-transform:uppercase}
+.tb-track{color:#ddd;font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tb-drs{color:#00ff41;font-weight:bold;display:none;letter-spacing:2px}
 .tb-cmp{color:#aaa}
 .tb-nav{display:flex;gap:14px;flex:none}
 .tb-nav a{font-size:.8rem;color:#666;text-decoration:none;letter-spacing:1px;text-transform:uppercase}
 .tb-nav a:hover{color:#ccc}
 .tb-nav a.cur{color:#e0e0e0;border-bottom:1px solid #888}
 
-/* ── main grid ── */
-.main{flex:1;display:flex;flex-direction:column;min-height:0}
+/* ── layout ── */
+.main{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden}
 
-/* big 3 stats */
-.big-row{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1.1fr 1fr}
-.big-cell{display:flex;flex-direction:column;justify-content:center;align-items:center;padding:12px 8px}
-.big-cell.center{border-left:1px solid #0f0f0f;border-right:1px solid #0f0f0f}
-.big-lbl{font-size:.78rem;color:#666;text-transform:uppercase;letter-spacing:3px;margin-bottom:6px}
-.big-num{font-size:clamp(3.5rem,10vw,7.5rem);font-weight:900;line-height:1;color:#fff;letter-spacing:-2px}
-.big-unit{font-size:.78rem;color:#666;text-transform:uppercase;letter-spacing:3px;margin-top:5px}
-.gear-num{font-size:clamp(7rem,20vw,15rem);font-weight:900;line-height:.9;color:#fff}
-.gear-num.N{color:#444}
-.gear-num.R{color:#ef4444}
+/* ── ROW 1: GEAR · SPEED · RPM BAR ── */
+.row-hero{flex:0 0 auto;display:grid;grid-template-columns:1fr 1.2fr 2fr;min-height:0;border-bottom:1px solid #111}
+.hero-cell{display:flex;flex-direction:column;justify-content:center;align-items:center;padding:14px 10px}
+.hero-cell.rpmcell{align-items:stretch;padding:18px 22px;border-left:1px solid #111}
+.hero-lbl{font-size:.72rem;color:#555;text-transform:uppercase;letter-spacing:3px;margin-bottom:4px}
+.gear-val{font-size:clamp(5rem,16vw,11rem);font-weight:900;line-height:1;color:#fff;letter-spacing:-4px}
+.gear-val.N{color:#444}
+.gear-val.R{color:#ef4444}
+.speed-val{font-size:clamp(3rem,9vw,6.5rem);font-weight:900;line-height:1;color:#fff;letter-spacing:-2px}
+.speed-unit{font-size:.78rem;color:#555;text-transform:uppercase;letter-spacing:3px;margin-top:4px}
+.rpm-lbl-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+.rpm-lbl{font-size:.72rem;color:#555;text-transform:uppercase;letter-spacing:3px}
+.rpm-pct{font-size:.85rem;font-weight:bold;color:#888}
+.rpm-track{flex:1;background:#0d0d0d;border-radius:3px;overflow:hidden;height:clamp(28px,5vh,48px);position:relative}
+.rpm-fill{height:100%;width:0%;transition:width .04s linear}
+.rpm-fill.lo  {background:#1a5c30}
+.rpm-fill.mid {background:#22c55e}
+.rpm-fill.hi  {background:#f59e0b}
+.rpm-fill.shift{background:#ef4444;animation:sf .1s infinite}
+@keyframes sf{0%,100%{box-shadow:inset 0 0 20px #ef000066}50%{box-shadow:inset 0 0 40px #ff440099}}
+.rpm-gear-mark{position:absolute;top:0;bottom:0;width:2px;background:#1a1a1a}
+.rpm-num{font-size:.78rem;color:#555;margin-top:6px;text-align:right;letter-spacing:1px}
+/* speed split (hero top-right) */
+.hero-cell.speedcell{border-left:1px solid #111}
 
-/* rev bar */
-.rev-row{flex:none;height:22px;position:relative;background:#060606;border-top:1px solid #0f0f0f;border-bottom:1px solid #0f0f0f;overflow:hidden}
-.rev-fill{position:absolute;top:0;left:0;height:100%;width:0%;transition:width .04s linear;background:#1a4d28}
-.rev-fill.lo{background:#1a6630}
-.rev-fill.mid{background:#22c55e}
-.rev-fill.hi{background:#f59e0b}
-.rev-fill.shift{background:#ef4444;animation:sf .12s infinite}
-@keyframes sf{0%,100%{opacity:1;box-shadow:0 0 20px #ef4444}50%{opacity:.7;box-shadow:0 0 40px #ff4400}}
-.rev-label{position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:.7rem;color:#555;letter-spacing:2px}
+/* ── ROW 2: PEDALS ── */
+.row-pedals{flex:none;border-bottom:1px solid #111;padding:12px 22px;display:flex;flex-direction:column;gap:10px}
+.pedal-row{display:flex;align-items:center;gap:14px}
+.pedal-lbl{font-size:.72rem;color:#666;text-transform:uppercase;letter-spacing:2px;width:80px;flex:none}
+.pedal-track{flex:1;background:#0d0d0d;border-radius:2px;overflow:hidden;height:20px}
+.pedal-fill{height:100%;width:0%;border-radius:2px;transition:width .04s linear}
+.thr-fill{background:#00ff41}
+.brk-fill{background:#ef4444}
+.pedal-pct{font-size:1.05rem;font-weight:900;width:46px;text-align:right;flex:none}
+.thr-pct{color:#00ff41}
+.brk-pct{color:#ef4444}
 
-/* pedal bars */
-.ped-row{flex:none;display:flex;gap:0;border-bottom:1px solid #0f0f0f}
-.ped{flex:1;padding:10px 16px;border-right:1px solid #0a0a0a}
-.ped:last-child{border-right:none}
-.ped-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
-.ped-name{font-size:.75rem;color:#666;text-transform:uppercase;letter-spacing:2px}
-.ped-pct{font-size:1rem;font-weight:900;min-width:3ch;text-align:right}
-.ped-bg{height:14px;background:#0a0a0a;border-radius:2px;overflow:hidden}
-.ped-fill{height:100%;width:0%;border-radius:2px;transition:width .04s linear}
-.thr .ped-pct{color:#00ff41}.thr .ped-fill{background:#00ff41}
-.brk .ped-pct{color:#ef4444}.brk .ped-fill{background:#ef4444}
-.clt .ped-pct{color:#f59e0b}.clt .ped-fill{background:#f59e0b}
+/* ── ROW 3: SLIP · TIMING ── */
+.row-mid{flex:none;display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid #111}
 
-/* secondary stats */
-.sec-row{flex:none;display:flex;border-bottom:1px solid #080808}
-.sec{flex:1;padding:8px 12px;text-align:center;border-right:1px solid #0a0a0a}
-.sec:last-child{border-right:none}
-.sec-lbl{font-size:.55rem;color:#1a1a1a;text-transform:uppercase;letter-spacing:2px;margin-bottom:3px}
-.sec-val{font-size:clamp(1rem,2.5vw,1.6rem);font-weight:bold;color:#888}
+/* slip panel */
+.slip-panel{padding:14px 22px;border-right:1px solid #111}
+.panel-lbl{font-size:.68rem;color:#555;text-transform:uppercase;letter-spacing:3px;margin-bottom:10px}
+.slip-row{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+.slip-row:last-child{margin-bottom:0}
+.slip-corner{font-size:.72rem;color:#666;letter-spacing:1px;width:22px;flex:none}
+.slip-track{flex:1;background:#0d0d0d;border-radius:2px;overflow:hidden;height:16px}
+.slip-fill{height:100%;width:0%;border-radius:2px;transition:width .08s linear}
+.slip-val{font-size:.9rem;font-weight:bold;width:42px;text-align:right;flex:none;transition:color .1s}
+.slip-warn{font-size:.85rem;width:16px;flex:none;text-align:center;opacity:0}
 
-/* bottom strip */
-.bot{flex:none;height:28px;display:flex;align-items:center;padding:0 14px;gap:10px;background:#000}
-.udp-strip{flex:1;font-size:.55rem;color:#151515;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.bot-btn{background:none;border:1px solid #111;color:#222;font-family:inherit;font-size:.55rem;padding:2px 8px;border-radius:2px;cursor:pointer;text-transform:uppercase;letter-spacing:1px}
-.bot-btn:hover{color:#666;border-color:#333}
+/* timing panel */
+.timing-panel{padding:14px 22px}
+.timing-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px}
+.t-cell{}
+.t-lbl{font-size:.65rem;color:#555;text-transform:uppercase;letter-spacing:2px;margin-bottom:3px}
+.t-val{font-size:1.1rem;font-weight:900;color:#e0e0e0;letter-spacing:.5px}
+.t-val.green{color:#22c55e}
+.delta-row{grid-column:1/-1;margin-top:4px;padding-top:8px;border-top:1px solid #111;display:flex;align-items:baseline;gap:10px}
+.delta-lbl{font-size:.65rem;color:#555;text-transform:uppercase;letter-spacing:2px}
+.delta-val{font-size:1.4rem;font-weight:900;letter-spacing:-1px}
+.delta-val.ahead{color:#22c55e}
+.delta-val.behind{color:#ef4444}
+.delta-val.even{color:#888}
+
+/* ── ROW 4: TYRES ── */
+.row-tyres{flex:none;padding:10px 22px;display:flex;align-items:center;gap:20px;border-bottom:1px solid #0a0a0a}
+.tyres-lbl{font-size:.68rem;color:#555;text-transform:uppercase;letter-spacing:3px;flex:none}
+.tyre-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 16px}
+.tyre-cell{display:flex;align-items:center;gap:6px}
+.tyre-corner{font-size:.65rem;color:#555;letter-spacing:1px;width:20px}
+.tyre-temp{font-size:.9rem;font-weight:bold;min-width:44px;transition:color .2s}
+.tyre-temp.cold{color:#5b9bd5}
+.tyre-temp.ok  {color:#22c55e}
+.tyre-temp.hot {color:#f59e0b}
+.tyre-temp.over{color:#ef4444}
+.tyre-temp.na  {color:#333}
+
+/* ── bottom strip ── */
+.bot{flex:none;height:28px;display:flex;align-items:center;padding:0 14px;gap:10px}
+.udp-strip{flex:1;font-size:.6rem;color:#222;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.bot-btn{background:none;border:1px solid #111;color:#333;font-family:inherit;font-size:.6rem;padding:2px 8px;border-radius:2px;cursor:pointer;text-transform:uppercase;letter-spacing:1px}
+.bot-btn:hover{color:#888;border-color:#333}
 .bot-btn.on{color:#00ff41;border-color:#00ff4133}
 
-/* debug overlay */
-#dbg{position:fixed;bottom:28px;left:0;right:0;height:230px;background:#03030a;border-top:1px solid #111;z-index:50;display:none;flex-direction:column}
+/* ── debug overlay ── */
+#dbg{position:fixed;bottom:28px;left:0;right:0;height:220px;background:#03030a;border-top:1px solid #111;z-index:50;display:none;flex-direction:column}
 #dbg .dh{flex:none;display:flex;justify-content:space-between;align-items:center;padding:5px 12px;border-bottom:1px solid #0d0d18}
-#dbg .dh span{font-size:.55rem;color:#252525;text-transform:uppercase;letter-spacing:2px}
-#dbg-log{flex:1;overflow-y:auto;font-size:.66rem;padding:6px 12px;font-family:'Courier New',monospace;line-height:1.6}
+#dbg .dh span{font-size:.6rem;color:#444;text-transform:uppercase;letter-spacing:2px}
+#dbg-log{flex:1;overflow-y:auto;font-size:.66rem;padding:6px 12px;line-height:1.6}
 </style>
 </head>
 <body>
+
 <div class="tb">
   <div class="dot" id="dot"></div>
   <span class="tb-stat" id="tb-stat">IDLE</span>
   <div class="tb-meta">
     <span class="tb-game" id="tb-game">—</span>
     <span class="tb-track" id="tb-track">—</span>
-    <span class="tb-lap" id="tb-lap">LAP —</span>
-    <span class="tb-best" id="tb-best">BEST —</span>
     <span class="tb-drs" id="tb-drs">DRS</span>
     <span class="tb-cmp" id="tb-cmp"></span>
   </div>
@@ -1198,52 +1244,102 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 </div>
 
 <div class="main">
-  <div class="big-row">
-    <div class="big-cell">
-      <div class="big-lbl">Speed</div>
-      <div class="big-num" id="spd">—</div>
-      <div class="big-unit">mph</div>
+
+  <!-- ROW 1: GEAR · SPEED · RPM BAR -->
+  <div class="row-hero">
+    <div class="hero-cell">
+      <div class="hero-lbl">Gear</div>
+      <div class="gear-val" id="gear">—</div>
     </div>
-    <div class="big-cell center">
-      <div class="big-lbl">Gear</div>
-      <div class="gear-num" id="gear">—</div>
+    <div class="hero-cell speedcell">
+      <div class="hero-lbl">Speed</div>
+      <div class="speed-val" id="spd">—</div>
+      <div class="speed-unit">mph</div>
     </div>
-    <div class="big-cell">
-      <div class="big-lbl">RPM</div>
-      <div class="big-num" id="rpm">—</div>
-      <div class="big-unit" id="rpm-sub"></div>
+    <div class="hero-cell rpmcell">
+      <div class="rpm-lbl-row">
+        <span class="rpm-lbl">RPM</span>
+        <span class="rpm-pct" id="rpm-pct">—</span>
+      </div>
+      <div class="rpm-track">
+        <div class="rpm-fill" id="rpm-fill"></div>
+        <div class="rpm-gear-mark" id="rpm-mark" style="left:75%"></div>
+      </div>
+      <div class="rpm-num" id="rpm-num">—</div>
     </div>
   </div>
 
-  <div class="rev-row">
-    <div class="rev-fill" id="rev"></div>
-    <div class="rev-label">REV</div>
-  </div>
-
-  <div class="ped-row">
-    <div class="ped thr">
-      <div class="ped-top"><span class="ped-name">Throttle</span><span class="ped-pct" id="thr-v">0%</span></div>
-      <div class="ped-bg"><div class="ped-fill" id="thr-b"></div></div>
+  <!-- ROW 2: PEDALS -->
+  <div class="row-pedals">
+    <div class="pedal-row">
+      <span class="pedal-lbl">Throttle</span>
+      <div class="pedal-track"><div class="pedal-fill thr-fill" id="thr-b"></div></div>
+      <span class="pedal-pct thr-pct" id="thr-v">0%</span>
     </div>
-    <div class="ped brk">
-      <div class="ped-top"><span class="ped-name">Brake</span><span class="ped-pct" id="brk-v">0%</span></div>
-      <div class="ped-bg"><div class="ped-fill" id="brk-b"></div></div>
-    </div>
-    <div class="ped clt">
-      <div class="ped-top"><span class="ped-name">Clutch</span><span class="ped-pct" id="clt-v">0%</span></div>
-      <div class="ped-bg"><div class="ped-fill" id="clt-b"></div></div>
+    <div class="pedal-row">
+      <span class="pedal-lbl">Brake</span>
+      <div class="pedal-track"><div class="pedal-fill brk-fill" id="brk-b"></div></div>
+      <span class="pedal-pct brk-pct" id="brk-v">0%</span>
     </div>
   </div>
 
-  <div class="sec-row">
-    <div class="sec"><div class="sec-lbl">G-Lat</div><div class="sec-val" id="glat">—</div></div>
-    <div class="sec"><div class="sec-lbl">G-Lon</div><div class="sec-val" id="glon">—</div></div>
-    <div class="sec"><div class="sec-lbl">Slip RL</div><div class="sec-val" id="srl">—</div></div>
-    <div class="sec"><div class="sec-lbl">Slip RR</div><div class="sec-val" id="srr">—</div></div>
-    <div class="sec"><div class="sec-lbl">Fuel Laps</div><div class="sec-val" id="fuel">—</div></div>
-    <div class="sec"><div class="sec-lbl">Tyre</div><div class="sec-val" id="tyre" style="font-size:.9rem">—</div></div>
+  <!-- ROW 3: SLIP · TIMING -->
+  <div class="row-mid">
+    <div class="slip-panel">
+      <div class="panel-lbl">Rear Slip</div>
+      <div class="slip-row">
+        <span class="slip-corner">RL</span>
+        <div class="slip-track"><div class="slip-fill" id="srl-b"></div></div>
+        <span class="slip-val" id="srl-v">—</span>
+        <span class="slip-warn" id="srl-w">⚠</span>
+      </div>
+      <div class="slip-row">
+        <span class="slip-corner">RR</span>
+        <div class="slip-track"><div class="slip-fill" id="srr-b"></div></div>
+        <span class="slip-val" id="srr-v">—</span>
+        <span class="slip-warn" id="srr-w">⚠</span>
+      </div>
+    </div>
+    <div class="timing-panel">
+      <div class="panel-lbl">Lap Timing</div>
+      <div class="timing-grid">
+        <div class="t-cell">
+          <div class="t-lbl">Current</div>
+          <div class="t-val" id="t-cur">—</div>
+        </div>
+        <div class="t-cell">
+          <div class="t-lbl">Best</div>
+          <div class="t-val green" id="t-best">—</div>
+        </div>
+        <div class="t-cell">
+          <div class="t-lbl">Last</div>
+          <div class="t-val" id="t-last">—</div>
+        </div>
+        <div class="t-cell">
+          <div class="t-lbl">Lap</div>
+          <div class="t-val" id="t-lap">—</div>
+        </div>
+        <div class="delta-row">
+          <span class="delta-lbl">Delta</span>
+          <span class="delta-val even" id="t-delta">—</span>
+        </div>
+      </div>
+    </div>
   </div>
-</div>
+
+  <!-- ROW 4: TYRES -->
+  <div class="row-tyres">
+    <span class="tyres-lbl">Tyres</span>
+    <div class="tyre-grid">
+      <div class="tyre-cell"><span class="tyre-corner">FL</span><span class="tyre-temp na" id="ty-fl">—</span></div>
+      <div class="tyre-cell"><span class="tyre-corner">FR</span><span class="tyre-temp na" id="ty-fr">—</span></div>
+      <div class="tyre-cell"><span class="tyre-corner">RL</span><span class="tyre-temp na" id="ty-rl">—</span></div>
+      <div class="tyre-cell"><span class="tyre-corner">RR</span><span class="tyre-temp na" id="ty-rr">—</span></div>
+    </div>
+    <span style="font-size:.65rem;color:#333;margin-left:8px" id="ty-cmp"></span>
+  </div>
+
+</div><!-- /main -->
 
 <div class="bot">
   <div class="udp-strip" id="udp-strip"></div>
@@ -1255,11 +1351,11 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
   <div class="dh">
     <span>Debug Console</span>
     <div style="display:flex;gap:10px;align-items:center">
-      <label style="font-size:.58rem;color:#333;cursor:pointer;display:flex;align-items:center;gap:4px"><input type="checkbox" id="dbg-as" checked> scroll</label>
-      <select id="dbg-f" onchange="applyFilter()" style="background:#0a0a12;border:1px solid #1a1a28;color:#444;font-family:inherit;font-size:.58rem;padding:2px 6px;border-radius:2px">
+      <label style="font-size:.6rem;color:#444;cursor:pointer;display:flex;align-items:center;gap:4px"><input type="checkbox" id="dbg-as" checked> scroll</label>
+      <select id="dbg-f" onchange="applyFilter()" style="background:#0a0a12;border:1px solid #1a1a28;color:#555;font-family:inherit;font-size:.6rem;padding:2px 6px;border-radius:2px">
         <option value="all">All</option><option value="warn">Warn+</option><option value="udp">UDP</option>
       </select>
-      <button onclick="clearDebug()" style="background:none;border:1px solid #1a1a28;color:#333;font-family:inherit;font-size:.58rem;padding:2px 8px;border-radius:2px;cursor:pointer">Clear</button>
+      <button onclick="clearDebug()" style="background:none;border:1px solid #1a1a28;color:#444;font-family:inherit;font-size:.6rem;padding:2px 8px;border-radius:2px;cursor:pointer">Clear</button>
     </div>
   </div>
   <div id="dbg-log"></div>
@@ -1268,63 +1364,123 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 <script>
 const $=id=>document.getElementById(id);
 const es=new EventSource('/stream');
-let _maxRpm=8500, _dbgEs=null, _dbgOpen=false;
+let _maxRpm=8500,_dbgEs=null,_dbgOpen=false,_bestLap=null;
 const _dbgLines=[];
+
+function fmt(s){
+  if(s==null)return'—';
+  const m=Math.floor(s/60);
+  return m+':'+(s%60).toFixed(3).padStart(6,'0');
+}
+
+function slipColor(v){
+  if(v<0.1)return'#22c55e';
+  if(v<0.3)return'#f59e0b';
+  return'#ef4444';
+}
+
+function tyreClass(t){
+  if(t==null)return'na';
+  if(t<170)return'cold';
+  if(t<=210)return'ok';
+  if(t<=230)return'hot';
+  return'over';
+}
+
+function setSlip(pfx,val){
+  const v=val??0;
+  const pct=Math.min(100,v/0.5*100);
+  const col=slipColor(v);
+  $(pfx+'-b').style.width=pct+'%';
+  $(pfx+'-b').style.background=col;
+  $(pfx+'-v').textContent=val!=null?v.toFixed(3):'—';
+  $(pfx+'-v').style.color=col;
+  const warn=$(pfx+'-w');
+  warn.style.opacity=v>=0.1?'1':'0';
+  warn.style.color=v>=0.3?'#ef4444':'#f59e0b';
+}
 
 es.onmessage=e=>{
   const d=JSON.parse(e.data);
   const recv=d.status==='receiving';
   const ended=d.status==='race_ended';
 
+  // topbar
   $('dot').className='dot '+(recv?'receiving':ended?'race_ended':'idle');
-  $('tb-stat').textContent=ended?'RACE ENDED':(d.status||'idle').toUpperCase();
+  $('tb-stat').textContent=ended?'RACE ENDED':(d.status||'IDLE').toUpperCase();
   $('tb-stat').className='tb-stat'+(recv?' receiving':ended?' race_ended':'');
   $('tb-game').textContent=d.game?d.game.replace(/_/g,' ').toUpperCase():'—';
   $('tb-track').textContent=d.track&&d.track!=='unknown'?d.track:'—';
-  $('tb-lap').textContent='LAP '+(d.lap??'—');
-  $('tb-best').textContent=d.best_lap_time_s?'BEST '+fmt(d.best_lap_time_s):'BEST —';
-  $('tb-drs').style.display=d.drs?'':'none';
+  $('tb-drs').style.display=d.drs?'inline':'none';
   $('tb-cmp').textContent=d.tyre_compound||'';
 
-  $('spd').textContent=d.speed_mph!=null?d.speed_mph.toFixed(0):'—';
-
+  // gear
   const g=d.gear;
   const ge=$('gear');
-  ge.textContent=g==null?'—':g===0?'N':g===-1?'R':g;
-  ge.className='gear-num'+(g===0?' N':g===-1?' R':'');
+  ge.textContent=g==null?'—':g===0?'N':g===-1?'R':String(g);
+  ge.className='gear-val'+(g===0?' N':g===-1?' R':'');
 
+  // speed
+  $('spd').textContent=d.speed_mph!=null?d.speed_mph.toFixed(0):'—';
+
+  // rpm bar
   const rpm=d.rpm||0;
-  $('rpm').textContent=rpm?Math.round(rpm).toLocaleString():'—';
   if(d.engine_max_rpm&&d.engine_max_rpm>2000)_maxRpm=d.engine_max_rpm;
-  const pct=Math.min(100,rpm/_maxRpm*100);
-  const rev=$('rev');
-  rev.style.width=pct+'%';
-  const cls=pct>=88?'shift':pct>=75?'hi':pct>=55?'mid':'lo';
-  rev.className='rev-fill '+cls;
-  $('rpm-sub').textContent=pct>1?Math.round(pct)+'%':'';
+  const rPct=Math.min(100,rpm/_maxRpm*100);
+  const rf=$('rpm-fill');
+  rf.style.width=rPct+'%';
+  rf.className='rpm-fill '+(rPct>=88?'shift':rPct>=75?'hi':rPct>=55?'mid':'lo');
+  $('rpm-pct').textContent=rPct>0?Math.round(rPct)+'%':'—';
+  $('rpm-num').textContent=rpm?Math.round(rpm).toLocaleString()+' rpm':'—';
 
-  const thr=d.throttle_pct||0,brk=d.brake_pct||0,clt=d.clutch_pct||0;
-  $('thr-b').style.width=thr+'%';$('thr-v').textContent=thr.toFixed(0)+'%';
-  $('brk-b').style.width=brk+'%';$('brk-v').textContent=brk.toFixed(0)+'%';
-  $('clt-b').style.width=clt+'%';$('clt-v').textContent=clt.toFixed(0)+'%';
+  // pedals
+  const thr=d.throttle_pct||0,brk=d.brake_pct||0;
+  $('thr-b').style.width=thr+'%';
+  $('thr-v').textContent=Math.round(thr)+'%';
+  $('brk-b').style.width=brk+'%';
+  $('brk-v').textContent=Math.round(brk)+'%';
 
-  $('glat').textContent=d.g_lat!=null?d.g_lat.toFixed(2)+'g':'—';
-  $('glon').textContent=d.g_lon!=null?d.g_lon.toFixed(2)+'g':'—';
-  $('srl').textContent=d.slip_rl!=null?d.slip_rl.toFixed(3):'—';
-  $('srr').textContent=d.slip_rr!=null?d.slip_rr.toFixed(3):'—';
-  $('fuel').textContent=d.fuel_remaining_laps!=null?d.fuel_remaining_laps.toFixed(1):'—';
-  $('tyre').textContent=d.tyre_compound||'—';
+  // slip
+  setSlip('srl',d.slip_rl);
+  setSlip('srr',d.slip_rr);
 
+  // timing
+  $('t-cur').textContent=fmt(d.current_lap_time);
+  $('t-best').textContent=fmt(d.best_lap_time_s);
+  $('t-last').textContent=fmt(d.last_lap_time_s);
+  $('t-lap').textContent=d.lap!=null?'L'+d.lap:'—';
+
+  // delta to best
+  const dEl=$('t-delta');
+  if(d.current_lap_time!=null&&d.best_lap_time_s!=null){
+    const delta=d.current_lap_time-d.best_lap_time_s;
+    const sign=delta<0?'':'+';
+    dEl.textContent=sign+delta.toFixed(3)+'s';
+    dEl.className='delta-val '+(delta<-0.01?'ahead':delta>0.01?'behind':'even');
+  } else {
+    dEl.textContent='—'; dEl.className='delta-val even';
+  }
+
+  // tyres
+  ['fl','fr','rl','rr'].forEach(c=>{
+    const el=$('ty-'+c);
+    const t=d['tyre_'+c];
+    el.textContent=t!=null?Math.round(t)+'°':'—';
+    el.className='tyre-temp '+tyreClass(t);
+  });
+  $('ty-cmp').textContent=d.tyre_compound||'';
+
+  // udp strip
   const udp=d.udp_received||{},rej=d.udp_rejected||{},rsz=d.last_rejected_size||{};
-  $('udp-strip').innerHTML=['forza_motorsport','acc','f1'].map(g=>{
-    const n=udp[g]||0,r=rej[g]||0,sz=rsz[g];
-    const c=n>0?'#22c55e22':r>0?'#ef444433':'#111';
-    return `<span style="color:${c}">${g.replace('_motorsport','').replace('_',' ')}: ${n}ok${r?' '+r+'rej':''}${sz?' ('+sz+'B)':''}</span>`;
-  }).join('<span style="color:#0a0a0a"> · </span>');
+  $('udp-strip').innerHTML=['forza_motorsport','acc','f1'].map(gm=>{
+    const n=udp[gm]||0,r=rej[gm]||0,sz=rsz[gm];
+    const c=n>0?'#22c55e33':r>0?'#ef444433':'#1a1a1a';
+    return `<span style="color:${c}">${gm.replace('_motorsport','').replace('_',' ')}: ${n}ok${r?' '+r+'rej':''}${sz?' ('+sz+'B)':''}</span>`;
+  }).join('<span style="color:#0d0d0d"> · </span>');
 };
-es.onerror=()=>{$('dot').className='dot idle';};
 
-function fmt(s){const m=Math.floor(s/60);return m+':'+(s%60).toFixed(3).padStart(6,'0');}
+es.onerror=()=>{$('dot').className='dot';};
+
 async function resetCounters(){await fetch('/reset',{method:'POST'});}
 
 function toggleDebug(){
