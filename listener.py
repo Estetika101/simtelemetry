@@ -1137,14 +1137,14 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 .hero-cell{display:flex;flex-direction:column;justify-content:center;align-items:center;padding:14px 10px}
 .hero-cell.rpmcell{align-items:stretch;padding:18px 22px;border-left:1px solid #111}
 .hero-lbl{font-size:1rem;color:#999;text-transform:uppercase;letter-spacing:3px;margin-bottom:4px}
-.gear-val{font-size:clamp(5rem,16vw,11rem);font-weight:900;line-height:1;color:#fff;letter-spacing:-4px}
+.gear-val{font-size:clamp(6rem,20vw,14rem);font-weight:900;line-height:1;color:#fff;letter-spacing:-4px}
 .gear-val.N{color:#444}
 .gear-val.R{color:#ef4444}
-.speed-val{font-size:clamp(3rem,9vw,6.5rem);font-weight:900;line-height:1;color:#fff;letter-spacing:-2px}
-.speed-unit{font-size:1rem;color:#999;text-transform:uppercase;letter-spacing:3px;margin-top:4px}
+.speed-val{font-size:clamp(4rem,11vw,8rem);font-weight:900;line-height:1;color:#fff;letter-spacing:-2px}
+.speed-unit{font-size:1.2rem;color:#999;text-transform:uppercase;letter-spacing:3px;margin-top:4px}
 .rpm-lbl-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
 .rpm-lbl{font-size:1rem;color:#999;text-transform:uppercase;letter-spacing:3px}
-.rpm-pct{font-size:1rem;font-weight:bold;color:#bbb}
+.rpm-pct{font-size:1.3rem;font-weight:bold;color:#bbb}
 .rpm-track{flex:1;background:#0d0d0d;border-radius:3px;overflow:hidden;height:clamp(28px,5vh,48px);position:relative}
 .rpm-fill{height:100%;width:0%;transition:width .04s linear}
 .rpm-fill.lo  {background:#1a5c30}
@@ -1153,7 +1153,7 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 .rpm-fill.shift{background:#ef4444;animation:sf .1s infinite}
 @keyframes sf{0%,100%{box-shadow:inset 0 0 20px #ef000066}50%{box-shadow:inset 0 0 40px #ff440099}}
 .rpm-gear-mark{position:absolute;top:0;bottom:0;width:2px;background:#1a1a1a}
-.rpm-num{font-size:.9rem;color:#888;margin-top:6px;text-align:right;letter-spacing:1px}
+.rpm-num{font-size:1.1rem;color:#888;margin-top:6px;text-align:right;letter-spacing:1px}
 /* speed split (hero top-right) */
 .hero-cell.speedcell{border-left:1px solid #111}
 
@@ -1165,7 +1165,7 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 .pedal-fill{height:100%;width:0%;border-radius:2px;transition:width .04s linear}
 .thr-fill{background:#00ff41}
 .brk-fill{background:#ef4444}
-.pedal-pct{font-size:1.3rem;font-weight:900;width:54px;text-align:right;flex:none}
+.pedal-pct{font-size:1.6rem;font-weight:900;width:60px;text-align:right;flex:none}
 .thr-pct{color:#00ff41}
 .brk-pct{color:#ef4444}
 
@@ -1180,7 +1180,7 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 .slip-corner{font-size:1rem;color:#aaa;letter-spacing:1px;width:28px;flex:none;font-weight:bold}
 .slip-track{flex:1;background:#0d0d0d;border-radius:2px;overflow:hidden;height:16px}
 .slip-fill{height:100%;width:0%;border-radius:2px;transition:width .08s linear}
-.slip-val{font-size:1.1rem;font-weight:bold;width:48px;text-align:right;flex:none;transition:color .1s}
+.slip-val{font-size:1.4rem;font-weight:bold;width:56px;text-align:right;flex:none;transition:color .1s}
 .slip-warn{font-size:.85rem;width:16px;flex:none;text-align:center;opacity:0}
 
 /* timing panel */
@@ -1188,11 +1188,11 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 .timing-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px}
 .t-cell{}
 .t-lbl{font-size:.9rem;color:#999;text-transform:uppercase;letter-spacing:2px;margin-bottom:3px}
-.t-val{font-size:1.25rem;font-weight:900;color:#e0e0e0;letter-spacing:.5px}
+.t-val{font-size:1.5rem;font-weight:900;color:#e0e0e0;letter-spacing:.5px}
 .t-val.green{color:#22c55e}
 .delta-row{grid-column:1/-1;margin-top:4px;padding-top:8px;border-top:1px solid #111;display:flex;align-items:baseline;gap:10px}
 .delta-lbl{font-size:.9rem;color:#999;text-transform:uppercase;letter-spacing:2px}
-.delta-val{font-size:1.4rem;font-weight:900;letter-spacing:-1px}
+.delta-val{font-size:1.8rem;font-weight:900;letter-spacing:-1px}
 .delta-val.ahead{color:#22c55e}
 .delta-val.behind{color:#ef4444}
 .delta-val.even{color:#888}
@@ -1239,9 +1239,10 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
     <a href="/" class="cur">Live</a>
     <a href="/sessions">Sessions</a>
     <a href="/setup">Setup</a>
-    <a href="/admin">Admin</a>
+    <a href="/admin" id="nav-admin" style="display:none">Admin</a>
   </nav>
 </div>
+<script>if(location.search.includes('debug=true'))document.getElementById('nav-admin').style.display='';</script>
 
 <div class="main">
 
@@ -1546,9 +1547,10 @@ SETUP_HTML = r"""<!DOCTYPE html>
     <a href="/">Live</a>
     <a href="/sessions">Sessions</a>
     <a href="/setup" class="active">Setup</a>
-    <a href="/admin">Admin</a>
+    <a href="/admin" id="nav-admin" style="display:none">Admin</a>
   </nav>
 </div>
+<script>if(location.search.includes('debug=true'))document.getElementById('nav-admin').style.display='';</script>
 
 <div class="section">
   <div class="section-title">Storage</div>
@@ -2086,9 +2088,10 @@ canvas{display:block;cursor:crosshair}
     <a href="/">Live</a>
     <a href="/sessions" class="cur">Sessions</a>
     <a href="/setup">Setup</a>
-    <a href="/admin">Admin</a>
+    <a href="/admin" id="nav-admin" style="display:none">Admin</a>
   </nav>
 </div>
+<script>if(location.search.includes('debug=true'))document.getElementById('nav-admin').style.display='';</script>
 <div class="layout">
   <div class="sidebar">
     <div class="game-tabs">
