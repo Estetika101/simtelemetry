@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import shutil
+import socket
 import urllib.parse
 import struct
 import time
@@ -748,6 +749,80 @@ async def session_watchdog():
                 state["game"]   = None
                 log.info("All sessions closed. Listening...")
 
+# ─── Admin Packet Injection ───────────────────────────────────────────────────
+
+def _build_inject_packets(game: str, p: dict) -> list:
+    """Build valid UDP telemetry packets from user-friendly params."""
+    speed_mph = float(p.get("speed_mph", 0))
+    throttle  = max(0.0, min(100.0, float(p.get("throttle_pct", 0))))
+    brake     = max(0.0, min(100.0, float(p.get("brake_pct", 0))))
+    rpm       = float(p.get("rpm", 1000))
+    gear      = int(p.get("gear", 1))
+    lap       = int(p.get("lap", 1))
+
+    if game == "forza_motorsport":
+        speed_ms = speed_mph / 2.237
+        vals = [
+            1, 0,                                                  # is_race_on, timestamp_ms
+            8500.0, 800.0, rpm,                                    # engine max/idle/current rpm
+            0.0, 0.0, 0.0,                                         # accel xyz
+            speed_ms, 0.0, 0.0,                                    # velocity xyz
+            0.0, 0.0, 0.0,                                         # angular velocity
+            0.0, 0.0, 0.0,                                         # yaw pitch roll
+            0.5, 0.5, 0.5, 0.5,                                    # norm suspension travel x4
+            0.0, 0.0, 0.0, 0.0,                                    # tire slip ratio x4
+            speed_ms*4, speed_ms*4, speed_ms*4, speed_ms*4,        # wheel rotation speed x4
+            0.0, 0.0, 0.0, 0.0,                                    # rumble strip x4
+            0.0, 0.0, 0.0, 0.0,                                    # puddle x4
+            0.0, 0.0, 0.0, 0.0,                                    # surface rumble x4
+            0.0, 0.0, 0.0, 0.0,                                    # slip angle x4
+            0.0, 0.0, 0.0, 0.0,                                    # combined slip x4
+            0.1, 0.1, 0.1, 0.1,                                    # suspension travel meters x4
+            42, 3, 750, 1, 6,                                      # car_ordinal/class/pi/drivetrain/cylinders
+            0.0, 0.0, 0.0,                                         # position xyz
+            speed_ms, 250000.0, 400.0,                             # speed, power, torque
+            85.0, 85.0, 85.0, 85.0,                                # tire temp x4
+            0.5, 0.6, 0.0,                                         # boost, fuel, distance
+            0.0, 0.0, 0.0, 0.0,                                    # best/last/current lap / race time
+            lap, 1,                                                # lap_number (H), race_position (B)
+            int(throttle/100*255), int(brake/100*255), 0, 0, gear, # accel brake clutch handbrake gear
+            0, 0, 0,                                               # steer, norm_driving_lane, norm_ai_brake
+        ]
+        return [struct.pack(FM_FORMAT, *vals)]
+
+    if game == "acc":
+        speed_kmh = speed_mph * 1.60934
+        vals = [
+            0,                            # packet_id
+            throttle / 100,               # gas
+            brake / 100,                  # brake
+            50.0,                         # fuel
+            gear,                         # gear
+            int(rpm),                     # rpm
+            0.0,                          # steer
+            speed_kmh,                    # speed_kmh
+            0.0, 0.0, speed_kmh / 3.6,   # vel xyz
+            0.0, 0.0, 0.0,               # acc xyz
+            0.0, 0.0, 0.0, 0.0,          # wheelSlip x4
+        ]
+        return [struct.pack("<ifffiiffffffffffff", *vals).ljust(200, b'\x00')]
+
+    if game == "f1":
+        speed_kmh = int(speed_mph * 1.60934)
+        uid = 0xDEADCAFE
+        def hdr(pid):
+            return struct.pack("<HBBBBBQfIIBB", 2024, 24, 1, 0, pid, 0, uid, 0.0, 0, 0, 0, 255)
+        sess = hdr(1) + struct.pack("<BbbBHBb", 0, 25, 20, 50, 5793, 10, 11)
+        car  = struct.pack(
+            "<HfffBbHBBH4H4B4BH4f4B",
+            speed_kmh, throttle/100, 0.0, brake/100, 0, gear, int(rpm), 0, 0, 0,
+            0, 0, 0, 0, 85, 85, 85, 85, 90, 90, 90, 90, 105,
+            23.5, 23.5, 22.8, 22.8, 0, 0, 0, 0,
+        ).ljust(60, b'\x00')
+        return [sess, hdr(6) + car]
+
+    return []
+
 # ─── Local Status Server ──────────────────────────────────────────────────────
 
 _PAGE_STYLE = """
@@ -828,6 +903,44 @@ _PAGE_STYLE = """
     font-size: 0.75rem; color: #666; cursor: pointer; user-select: none; }
   .dir-item:hover { background: #0f0f1e; color: #ccc; }
   .dir-empty { padding: 14px 12px; font-size: 0.7rem; color: #333; text-align: center; }
+  /* admin page */
+  .tabs { display: flex; gap: 8px; margin-bottom: 24px; }
+  .tab { background: #1a1a1f; border: 1px solid #2a2a3a; color: #555; font-family: inherit;
+    font-size: 0.75rem; padding: 7px 18px; border-radius: 3px; cursor: pointer; letter-spacing: 1px; }
+  .tab.active { border-color: #22c55e44; color: #22c55e; background: #22c55e11; }
+  .tab:hover:not(.active) { color: #aaa; border-color: #444; }
+  .ctrl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 24px; margin-bottom: 20px; }
+  .ctrl label { display: flex; justify-content: space-between; font-size: 0.7rem; color: #666; margin-bottom: 6px; }
+  .ctrl label .val { color: #e0e0e0; font-weight: bold; }
+  .ctrl input[type=range] { width: 100%; accent-color: #22c55e; cursor: pointer; height: 4px; }
+  .gear-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .gear-btn { background: #1a1a1f; border: 1px solid #2a2a3a; color: #555; font-family: inherit;
+    font-size: 0.75rem; padding: 6px 0; border-radius: 3px; cursor: pointer; width: 38px; text-align: center; }
+  .gear-btn.active { background: #22c55e11; border-color: #22c55e44; color: #22c55e; }
+  .gear-btn:hover:not(.active) { border-color: #444; color: #aaa; }
+  .preset-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+  .preset-btn { background: #1a1a1f; border: 1px solid #2a2a3a; color: #555; font-family: inherit;
+    font-size: 0.7rem; padding: 6px 14px; border-radius: 3px; cursor: pointer; }
+  .preset-btn:hover { border-color: #555; color: #ccc; }
+  .action-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .btn-inject { background: #22c55e; color: #000; border: none; font-family: inherit;
+    font-weight: bold; font-size: 0.8rem; padding: 9px 20px; border-radius: 4px; cursor: pointer; }
+  .btn-inject:hover { background: #16a34a; }
+  .btn-stream { background: #1a1a1f; border: 1px solid #2a2a3a; color: #aaa; font-family: inherit;
+    font-size: 0.8rem; padding: 9px 20px; border-radius: 4px; cursor: pointer; }
+  .btn-stream.on { background: #ef444411; border-color: #ef444444; color: #ef4444; }
+  .hz-sel { background: #1a1a1f; border: 1px solid #2a2a3a; color: #777; font-family: inherit;
+    font-size: 0.75rem; padding: 8px 10px; border-radius: 4px; }
+  .sent-lbl { font-size: 0.75rem; color: #333; margin-left: 4px; }
+  .sent-lbl span { color: #666; }
+  .admin-divider { border: none; border-top: 1px solid #1a1a28; margin: 20px 0; }
+  .lap-row { display: flex; align-items: center; gap: 10px; }
+  .lap-input { background: #1a1a1f; border: 1px solid #2a2a3a; color: #e0e0e0; font-family: inherit;
+    font-size: 0.95rem; padding: 6px 10px; border-radius: 4px; width: 60px; text-align: center; outline: none; }
+  .btn-nextlap { background: #1a1a1f; border: 1px solid #2a2a3a; color: #666; font-family: inherit;
+    font-size: 0.7rem; padding: 7px 12px; border-radius: 4px; cursor: pointer; }
+  .btn-nextlap:hover { border-color: #555; color: #ccc; }
+  .inject-err { font-size: 0.7rem; color: #ef4444; margin-top: 10px; min-height: 1em; }
 </style>
 """
 
@@ -846,6 +959,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <a href="/" class="active">Live</a>
     <a href="/sessions">Sessions</a>
     <a href="/setup">Setup</a>
+    <a href="/admin">Admin</a>
   </nav>
 </div>
 <div class="meta">
@@ -936,6 +1050,7 @@ SETUP_HTML = r"""<!DOCTYPE html>
     <a href="/">Live</a>
     <a href="/sessions">Sessions</a>
     <a href="/setup" class="active">Setup</a>
+    <a href="/admin">Admin</a>
   </nav>
 </div>
 
@@ -1130,6 +1245,207 @@ load();
 """
 
 
+ADMIN_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SimTelemetry · Admin</title>
+""" + _PAGE_STYLE + r"""
+</head>
+<body>
+<div class="topbar">
+  <h1>SimTelemetry</h1>
+  <nav>
+    <a href="/">Live</a>
+    <a href="/sessions">Sessions</a>
+    <a href="/setup">Setup</a>
+    <a href="/admin" class="active">Admin</a>
+  </nav>
+</div>
+
+<div class="tabs">
+  <button class="tab active" onclick="setGame('forza_motorsport',this)">Forza</button>
+  <button class="tab" onclick="setGame('acc',this)">ACC</button>
+  <button class="tab" onclick="setGame('f1',this)">F1</button>
+</div>
+
+<div class="ctrl-grid">
+  <div class="ctrl">
+    <label>Speed <span class="val"><span id="speed-val">0</span> mph</span></label>
+    <input type="range" id="speed" min="0" max="220" step="1" value="0" oninput="sync('speed','speed-val')">
+  </div>
+  <div class="ctrl">
+    <label>RPM <span class="val"><span id="rpm-val">1000</span></span></label>
+    <input type="range" id="rpm" min="0" max="12000" step="100" value="1000" oninput="sync('rpm','rpm-val')">
+  </div>
+  <div class="ctrl">
+    <label>Throttle <span class="val"><span id="thr-val">0</span>%</span></label>
+    <input type="range" id="throttle" min="0" max="100" step="1" value="0" oninput="sync('throttle','thr-val')">
+  </div>
+  <div class="ctrl">
+    <label>Brake <span class="val"><span id="brk-val">0</span>%</span></label>
+    <input type="range" id="brake" min="0" max="100" step="1" value="0" oninput="sync('brake','brk-val')">
+  </div>
+</div>
+
+<div class="ctrl" style="margin-bottom:16px">
+  <label>Gear</label>
+  <div class="gear-row" id="gear-row">
+    <button class="gear-btn" onclick="setGear(-1,this)">R</button>
+    <button class="gear-btn" onclick="setGear(0,this)">N</button>
+    <button class="gear-btn active" onclick="setGear(1,this)">1</button>
+    <button class="gear-btn" onclick="setGear(2,this)">2</button>
+    <button class="gear-btn" onclick="setGear(3,this)">3</button>
+    <button class="gear-btn" onclick="setGear(4,this)">4</button>
+    <button class="gear-btn" onclick="setGear(5,this)">5</button>
+    <button class="gear-btn" onclick="setGear(6,this)">6</button>
+    <button class="gear-btn" onclick="setGear(7,this)">7</button>
+    <button class="gear-btn" onclick="setGear(8,this)">8</button>
+  </div>
+</div>
+
+<div class="ctrl" style="margin-bottom:16px">
+  <label>Lap</label>
+  <div class="lap-row">
+    <input type="number" class="lap-input" id="lap" value="1" min="0" max="99">
+    <button class="btn-nextlap" onclick="nextLap()">Next Lap ↑</button>
+  </div>
+</div>
+
+<hr class="admin-divider">
+
+<div class="preset-row">
+  <button class="preset-btn" onclick="applyPreset('idle')">Idle</button>
+  <button class="preset-btn" onclick="applyPreset('cruise')">Cruise</button>
+  <button class="preset-btn" onclick="applyPreset('full')">Full Throttle</button>
+  <button class="preset-btn" onclick="applyPreset('brake')">Braking</button>
+  <button class="preset-btn" onclick="applyPreset('pit')">Pit Lane</button>
+</div>
+
+<div class="action-row" style="margin-top:20px">
+  <button class="btn-inject" onclick="sendOnce()">Send Once</button>
+  <button class="btn-stream" id="stream-btn" onclick="toggleStream()">▶ Stream</button>
+  <select class="hz-sel" id="hz-sel">
+    <option value="1000">1 Hz</option>
+    <option value="200">5 Hz</option>
+    <option value="100" selected>10 Hz</option>
+    <option value="50">20 Hz</option>
+    <option value="33">30 Hz</option>
+  </select>
+  <div class="sent-lbl">Sent: <span id="sent-count">0</span></div>
+</div>
+<div class="inject-err" id="inject-err"></div>
+
+<script>
+let _game = 'forza_motorsport';
+let _gear = 1;
+let _streamTimer = null;
+let _sentCount = 0;
+
+function setGame(g, el) {
+  _game = g;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+}
+
+function sync(sliderId, valId) {
+  document.getElementById(valId).textContent = document.getElementById(sliderId).value;
+}
+
+function setGear(g, el) {
+  _gear = g;
+  document.querySelectorAll('.gear-btn').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+}
+
+function nextLap() {
+  const el = document.getElementById('lap');
+  el.value = parseInt(el.value || 0) + 1;
+}
+
+const PRESETS = {
+  idle:   { speed: 0,   rpm: 900,  throttle: 0,  brake: 0,  gear: 0  },
+  cruise: { speed: 100, rpm: 4000, throttle: 35, brake: 0,  gear: 5  },
+  full:   { speed: 160, rpm: 9500, throttle: 100,brake: 0,  gear: 6  },
+  brake:  { speed: 80,  rpm: 5000, throttle: 0,  brake: 90, gear: 4  },
+  pit:    { speed: 37,  rpm: 2500, throttle: 20, brake: 0,  gear: 2  },
+};
+
+function applyPreset(name) {
+  const p = PRESETS[name];
+  if (!p) return;
+  document.getElementById('speed').value    = p.speed;    sync('speed','speed-val');
+  document.getElementById('rpm').value      = p.rpm;      sync('rpm','rpm-val');
+  document.getElementById('throttle').value = p.throttle; sync('throttle','thr-val');
+  document.getElementById('brake').value    = p.brake;    sync('brake','brk-val');
+  // set gear button
+  const gearMap = { '-1':'R', '0':'N', '1':'1','2':'2','3':'3','4':'4','5':'5','6':'6','7':'7','8':'8' };
+  document.querySelectorAll('.gear-btn').forEach(b => {
+    const g = b.textContent.trim();
+    const match = String(p.gear) === Object.keys(gearMap).find(k => gearMap[k] === g);
+    b.classList.toggle('active', match);
+    if (match) _gear = p.gear;
+  });
+  _gear = p.gear;
+  document.querySelectorAll('.gear-btn').forEach(b => {
+    b.classList.remove('active');
+    if ((p.gear === -1 && b.textContent === 'R') ||
+        (p.gear === 0 && b.textContent === 'N') ||
+        (String(p.gear) === b.textContent)) {
+      b.classList.add('active');
+    }
+  });
+}
+
+function params() {
+  return {
+    game:         _game,
+    speed_mph:    parseFloat(document.getElementById('speed').value),
+    rpm:          parseFloat(document.getElementById('rpm').value),
+    throttle_pct: parseFloat(document.getElementById('throttle').value),
+    brake_pct:    parseFloat(document.getElementById('brake').value),
+    gear:         _gear,
+    lap:          parseInt(document.getElementById('lap').value || 1),
+  };
+}
+
+async function sendOnce() {
+  const errEl = document.getElementById('inject-err');
+  errEl.textContent = '';
+  try {
+    const r = await fetch('/admin/inject', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params()),
+    });
+    const d = await r.json();
+    if (!r.ok) { errEl.textContent = d.error || 'Inject failed'; return; }
+    _sentCount += d.sent || 1;
+    document.getElementById('sent-count').textContent = _sentCount;
+  } catch(e) { errEl.textContent = 'Network error: ' + e.message; }
+}
+
+function toggleStream() {
+  const btn = document.getElementById('stream-btn');
+  if (_streamTimer) {
+    clearInterval(_streamTimer);
+    _streamTimer = null;
+    btn.classList.remove('on');
+    btn.textContent = '▶ Stream';
+  } else {
+    const hz = parseInt(document.getElementById('hz-sel').value);
+    _streamTimer = setInterval(sendOnce, hz);
+    btn.classList.add('on');
+    btn.textContent = '■ Stop';
+  }
+}
+</script>
+</body>
+</html>
+"""
+
+
 def _http_response(status: str, content_type: str, body: bytes, extra_headers: str = "") -> bytes:
     return (
         f"HTTP/1.1 {status}\r\n"
@@ -1232,6 +1548,33 @@ async def handle_status(reader, writer):
                     pass
             writer.write(_http_response("200 OK", "application/json", json.dumps(result, indent=2).encode()))
 
+        elif path == "/admin" and method == "GET":
+            writer.write(_http_response("200 OK", "text/html", ADMIN_HTML.encode()))
+
+        elif path == "/admin/inject" and method == "POST":
+            try:
+                p = json.loads(raw_body)
+            except (json.JSONDecodeError, ValueError) as exc:
+                err = json.dumps({"error": f"Invalid JSON: {exc}"}).encode()
+                writer.write(_http_response("400 Bad Request", "application/json", err))
+            else:
+                game = p.get("game", "forza_motorsport")
+                if game not in PORTS:
+                    err = json.dumps({"error": f"Unknown game: {game}"}).encode()
+                    writer.write(_http_response("400 Bad Request", "application/json", err))
+                else:
+                    try:
+                        packets = _build_inject_packets(game, p)
+                        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                        for pkt in packets:
+                            sock.sendto(pkt, ("127.0.0.1", PORTS[game]))
+                        sock.close()
+                        result = json.dumps({"ok": True, "sent": len(packets)}).encode()
+                        writer.write(_http_response("200 OK", "application/json", result))
+                    except Exception as exc:
+                        err = json.dumps({"error": str(exc)}).encode()
+                        writer.write(_http_response("500 Internal Server Error", "application/json", err))
+
         elif path == "/browse":
             qs = {k: urllib.parse.unquote_plus(v)
                   for pair in query_string.split("&") if "=" in pair
@@ -1319,6 +1662,7 @@ async def main():
     log.info(f"Storage path: {storage_path()}")
     log.info(f"Dashboard at http://pi.local:{STATUS_PORT}/")
     log.info(f"Setup     at http://pi.local:{STATUS_PORT}/setup")
+    log.info(f"Admin     at http://pi.local:{STATUS_PORT}/admin")
     log.info(f"Status API at http://pi.local:{STATUS_PORT}/status")
 
     async with server:
