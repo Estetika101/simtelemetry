@@ -25,15 +25,17 @@ from typing import Optional
 CONFIG_FILE = Path(__file__).parent / "simtelemetry.config.json"
 
 DEFAULTS: dict = {
-    "storage_path":     "/mnt/usb/simtelemetry",
+    "storage_path":      "/mnt/usb/simtelemetry",
     "session_timeout_s": 10,
     "idle_timeout_s":    30,
-    "status_port":      8000,
+    "status_port":       8000,
     "ports": {
         "forza_motorsport": 5300,
         "acc":              9996,
         "f1":               20777,
     },
+    "anthropic_api_key": "",
+    "anthropic_model":   "claude-sonnet-4-6",
 }
 
 def load_config() -> dict:
@@ -1434,6 +1436,23 @@ SETUP_HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
+<div class="section">
+  <div class="section-title">AI Analysis</div>
+  <div class="field">
+    <label>Anthropic API key — used for post-session race analysis</label>
+    <input type="password" id="anthropic_api_key" placeholder="sk-ant-…" autocomplete="off">
+    <div class="hint">Get a key at console.anthropic.com. Stored locally in simtelemetry.config.json.</div>
+  </div>
+  <div class="field">
+    <label>Model</label>
+    <select id="anthropic_model" style="width:100%;background:#1a1a1f;border:1px solid #2a2a3a;color:#e0e0e0;font-family:inherit;font-size:0.85rem;padding:8px 10px;border-radius:4px;outline:none">
+      <option value="claude-sonnet-4-6">Claude Sonnet 4.6 — best balance of speed and quality</option>
+      <option value="claude-opus-4-7">Claude Opus 4.7 — most capable, slower</option>
+      <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 — fastest, lowest cost</option>
+    </select>
+  </div>
+</div>
+
 <button class="btn" id="save-btn" onclick="save()">Save</button>
 <div class="toast" id="toast"></div>
 
@@ -1531,6 +1550,9 @@ async function load() {
   document.getElementById('port_forza').value        = (d.ports || {}).forza_motorsport || 5300;
   document.getElementById('port_acc').value          = (d.ports || {}).acc || 9996;
   document.getElementById('port_f1').value           = (d.ports || {}).f1 || 20777;
+  document.getElementById('anthropic_api_key').value = d.anthropic_api_key || '';
+  const modelSel = document.getElementById('anthropic_model');
+  if (d.anthropic_model) modelSel.value = d.anthropic_model;
   renderDisk(d.disk);
   if (d.storage_path) validatePath(d.storage_path);
 }
@@ -1555,7 +1577,9 @@ async function save() {
       forza_motorsport: parseInt(document.getElementById('port_forza').value, 10),
       acc:              parseInt(document.getElementById('port_acc').value, 10),
       f1:               parseInt(document.getElementById('port_f1').value, 10),
-    }
+    },
+    anthropic_api_key: document.getElementById('anthropic_api_key').value.trim(),
+    anthropic_model:   document.getElementById('anthropic_model').value,
   };
   try {
     const r = await fetch('/config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
@@ -1876,6 +1900,16 @@ canvas{display:block;cursor:crosshair}
 #tip{position:fixed;background:#0a0a12;border:1px solid #2a2a3a;border-radius:4px;padding:8px 12px;font-size:.72rem;pointer-events:none;display:none;z-index:200;min-width:130px;line-height:1.8}
 .tr{display:flex;justify-content:space-between;gap:14px}
 .tk{color:#777}.tv{font-weight:bold}
+
+/* analysis tab */
+.analysis-area{flex:1;overflow-y:auto;display:none;flex-direction:column}
+.analysis-area::-webkit-scrollbar{width:4px}.analysis-area::-webkit-scrollbar-thumb{background:#1a1a2a}
+.analysis-inner{padding:24px 28px;max-width:720px}
+.btn-analyze{background:#22c55e;color:#000;border:none;font-family:inherit;font-size:.85rem;font-weight:bold;padding:10px 24px;border-radius:4px;cursor:pointer;letter-spacing:1px;margin-bottom:20px}
+.btn-analyze:hover{background:#16a34a}
+.btn-analyze:disabled{background:#1a3a1a;color:#2a6a2a;cursor:default}
+.analysis-body{font-size:.85rem;line-height:1.75;color:#ccc;white-space:pre-wrap;border-top:1px solid #1a1a28;padding-top:18px;display:none}
+.analysis-err{color:#ef4444;font-size:.8rem;margin-top:12px}
 </style>
 </head>
 <body>
@@ -1902,6 +1936,7 @@ canvas{display:block;cursor:crosshair}
     <div class="detail-tabs" id="dtabs">
       <button class="d-tab active" onclick="switchTab('results',this)">Results</button>
       <button class="d-tab" onclick="switchTab('telemetry',this)">Telemetry</button>
+      <button class="d-tab" onclick="switchTab('analysis',this)">AI Analysis</button>
     </div>
     <div class="results-area" id="results-area">
       <div class="cards-grid" id="cards-grid"></div>
@@ -1920,6 +1955,12 @@ canvas{display:block;cursor:crosshair}
     <div class="telem-area" id="telem-area">
       <div class="lap-bar" id="lbar"></div>
       <div class="chart-area" id="carea"></div>
+    </div>
+    <div class="analysis-area" id="analysis-area">
+      <div class="analysis-inner" id="analysis-inner">
+        <button class="btn-analyze" id="btn-analyze" onclick="runAnalysis()">Analyze with Claude</button>
+        <div class="analysis-body" id="analysis-body"></div>
+      </div>
     </div>
     <div class="empty" id="empty">Select a session</div>
   </div>
@@ -1982,6 +2023,12 @@ async function pick(id) {
   try { _laps=await fetch('/sessions/laps?id='+id).then(r=>r.json()); }
   catch(e){_laps=[];}
   _lapIdx=0;
+  // reset analysis panel for new session
+  document.getElementById('analysis-body').style.display='none';
+  document.getElementById('analysis-body').textContent='';
+  document.getElementById('btn-analyze').textContent='Analyze with Claude';
+  document.getElementById('btn-analyze').disabled=false;
+  const prevErr=document.getElementById('analysis-err'); if(prevErr) prevErr.remove();
   renderHeader();
   document.getElementById('empty').style.display='none';
   document.getElementById('shdr').style.display='flex';
@@ -1995,15 +2042,47 @@ function switchTab(tab, el) {
   if(el) el.classList.add('active');
   const ra=document.getElementById('results-area');
   const ta=document.getElementById('telem-area');
+  const aa=document.getElementById('analysis-area');
+  ra.style.display='none'; ta.style.display='none'; aa.style.display='none';
   if(tab==='results'){
     ra.style.display='block';
-    ta.style.display='none';
     if(_cur) renderResults();
-  } else {
-    ra.style.display='none';
+  } else if(tab==='telemetry'){
     ta.style.display='flex';
     if(_cur) { renderLapBar(); renderCharts(); }
+  } else if(tab==='analysis'){
+    aa.style.display='flex';
   }
+}
+
+let _analysisCache = {};
+async function runAnalysis() {
+  if(!_cur) return;
+  const sid = _cur.session_id;
+  const btn = document.getElementById('btn-analyze');
+  const body = document.getElementById('analysis-body');
+  const cached = _analysisCache[sid];
+  if(cached){ body.textContent=cached; body.style.display='block'; return; }
+  btn.disabled=true; btn.textContent='Analyzing…';
+  body.style.display='none'; body.textContent='';
+  const errEl = document.getElementById('analysis-err');
+  if(errEl) errEl.remove();
+  try {
+    const r = await fetch('/analyze?id='+encodeURIComponent(sid));
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error||'Unknown error');
+    _analysisCache[sid] = d.analysis;
+    body.textContent = d.analysis;
+    body.style.display = 'block';
+    btn.textContent = 'Re-analyze';
+  } catch(e) {
+    const err = document.createElement('div');
+    err.id='analysis-err'; err.className='analysis-err';
+    err.textContent = '✗ ' + e.message;
+    document.getElementById('analysis-inner').appendChild(err);
+    btn.textContent = 'Analyze with Claude';
+  }
+  btn.disabled=false;
 }
 
 function renderHeader() {
@@ -2325,6 +2404,110 @@ init();
 """
 
 
+# ─── AI Analysis ──────────────────────────────────────────────────────────────
+
+import statistics as _statistics
+import urllib.request as _urllib_req
+
+def _summarize_lap(lap: dict) -> Optional[dict]:
+    samples = lap.get("samples", [])
+    if not samples or not lap.get("lap_time_s"):
+        return None
+    throttle = [s["throttle_pct"] for s in samples]
+    brake    = [s["brake_pct"]    for s in samples]
+    g_lat    = [abs(s.get("g_lat", 0)) for s in samples]
+    slip     = [abs(s.get("slip_rl", 0)) + abs(s.get("slip_rr", 0)) for s in samples]
+    n = len(samples)
+    return {
+        "lap_number":    lap["lap_number"],
+        "lap_time_s":    lap["lap_time_s"],
+        "max_speed_mph": lap.get("max_speed_mph", 0),
+        "avg_throttle":  round(sum(throttle) / n, 1),
+        "avg_brake":     round(sum(brake)    / n, 1),
+        "avg_g_lat":     round(sum(g_lat)    / n, 3),
+        "avg_slip":      round(sum(slip)      / n, 4),
+    }
+
+
+def _build_analysis_prompt(session: dict, laps: list, historical: list) -> str:
+    game  = session.get("game", "unknown").replace("_", " ").title()
+    track = session.get("track", "unknown")
+    car   = session.get("car", "unknown")
+    date  = (session.get("started_at") or "")[:10]
+
+    summaries = [s for lap in laps if (s := _summarize_lap(lap))]
+    valid_times = [s["lap_time_s"] for s in summaries]
+    best = min(valid_times) if valid_times else None
+    avg  = sum(valid_times) / len(valid_times) if valid_times else None
+    cons = _statistics.stdev(valid_times) if len(valid_times) > 1 else 0.0
+
+    header = (
+        f"Lap  Time      MaxSpd   Throttle  Brake  G-Lat   Slip\n"
+        f"{'-'*58}\n"
+    )
+    rows = ""
+    for s in summaries:
+        marker = " ◄" if s["lap_time_s"] == best else ""
+        rows += (
+            f"{s['lap_number']:<4} {s['lap_time_s']:.3f}s   "
+            f"{s['max_speed_mph']:.0f}mph    "
+            f"{s['avg_throttle']:.0f}%       "
+            f"{s['avg_brake']:.0f}%    "
+            f"{s['avg_g_lat']:.2f}g   "
+            f"{s['avg_slip']:.4f}{marker}\n"
+        )
+
+    hist_block = ""
+    if historical:
+        hist_block = f"\nHISTORICAL — {track} (last {min(len(historical),5)} sessions):\n"
+        for h in historical[-5:]:
+            h_date  = (h.get("started_at") or "")[:10]
+            h_best  = h.get("best_lap_time_s")
+            h_laps  = len(h.get("laps", []))
+            if h_best:
+                hist_block += f"  {h_date}  best: {h_best:.3f}s  laps: {h_laps}\n"
+
+    return f"""You are a sim racing telemetry analyst. Analyze the session below and give direct, data-driven coaching.
+
+SESSION: {game} | Track: {track} | Car: {car} | Date: {date}
+Best lap: {f"{best:.3f}s" if best else "—"} | Avg: {f"{avg:.3f}s" if avg else "—"} | Consistency (σ): {cons:.3f}s
+{hist_block}
+LAP TABLE (◄ = best lap):
+{header}{rows}
+Columns: Time=lap time, MaxSpd=top speed, Throttle/Brake=session averages, G-Lat=avg lateral G, Slip=avg rear wheel slip (higher=more oversteer).
+
+Write 3–5 focused paragraphs covering:
+1. Pace and consistency — is the driver finding a rhythm?
+2. Driving style — what do throttle, brake, and G-lat numbers reveal?
+3. Stability — what does the slip trend across laps indicate?
+4. The single most impactful area to improve, with a specific suggestion.
+5. Historical comparison — are they faster or slower than previous visits? (skip if no history)
+
+Be specific. Use the numbers. No generic advice."""
+
+
+def _call_claude_api(prompt: str) -> str:
+    api_key = config.get("anthropic_api_key", "").strip()
+    model   = config.get("anthropic_model", "claude-sonnet-4-6").strip()
+    if not api_key:
+        raise ValueError("Anthropic API key not set — add it in Setup → AI Analysis")
+    payload = json.dumps({
+        "model": model,
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": prompt}],
+    }).encode()
+    req = _urllib_req.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=payload, method="POST",
+    )
+    req.add_header("x-api-key", api_key)
+    req.add_header("anthropic-version", "2023-06-01")
+    req.add_header("content-type", "application/json")
+    with _urllib_req.urlopen(req, timeout=45) as resp:
+        data = json.loads(resp.read())
+    return data["content"][0]["text"]
+
+
 def _http_response(status: str, content_type: str, body: bytes, extra_headers: str = "") -> bytes:
     return (
         f"HTTP/1.1 {status}\r\n"
@@ -2400,13 +2583,17 @@ async def handle_status(reader, writer):
                     err = json.dumps({"error": f"Cannot create storage path: {exc}"}).encode()
                     writer.write(_http_response("400 Bad Request", "application/json", err))
                 else:
-                    config["storage_path"]     = new_path
+                    config["storage_path"]      = new_path
                     config["session_timeout_s"] = int(incoming.get("session_timeout_s", config["session_timeout_s"]))
                     if "ports" in incoming:
                         config["ports"].update({
                             k: int(v) for k, v in incoming["ports"].items()
                             if k in config["ports"]
                         })
+                    if "anthropic_api_key" in incoming:
+                        config["anthropic_api_key"] = str(incoming["anthropic_api_key"]).strip()
+                    if "anthropic_model" in incoming:
+                        config["anthropic_model"] = str(incoming["anthropic_model"]).strip()
                     save_config(config)
                     msg = "Saved."
                     if incoming.get("ports") and incoming["ports"] != PORTS:
@@ -2441,6 +2628,44 @@ async def handle_status(reader, writer):
                 writer.write(_http_response("200 OK", "application/json", laps_file.read_bytes()))
             except OSError:
                 writer.write(_http_response("404 Not Found", "application/json", b"[]"))
+
+        elif path == "/analyze":
+            qs = {k: urllib.parse.unquote_plus(v)
+                  for pair in query_string.split("&") if "=" in pair
+                  for k, v in [pair.split("=", 1)]}
+            sid = qs.get("id", "")
+            sessions_dir = storage_path() / "sessions"
+            try:
+                session_data = json.loads((sessions_dir / f"{sid}.json").read_text())
+                laps_data    = json.loads((sessions_dir / f"{sid}_laps.json").read_text())
+            except OSError:
+                writer.write(_http_response("404 Not Found", "application/json",
+                                            json.dumps({"error": "Session not found"}).encode()))
+            else:
+                track = session_data.get("track", "unknown")
+                historical = []
+                if track and track != "unknown":
+                    for f in sorted(sessions_dir.glob("*_[!l]*.json")):
+                        if f.stem == sid:
+                            continue
+                        try:
+                            h = json.loads(f.read_text())
+                            if h.get("track") == track:
+                                historical.append(h)
+                        except Exception:
+                            pass
+                try:
+                    prompt   = _build_analysis_prompt(session_data, laps_data, historical)
+                    analysis = await asyncio.to_thread(_call_claude_api, prompt)
+                    result   = json.dumps({"analysis": analysis, "session_id": sid}).encode()
+                    writer.write(_http_response("200 OK", "application/json", result))
+                except ValueError as exc:
+                    writer.write(_http_response("400 Bad Request", "application/json",
+                                                json.dumps({"error": str(exc)}).encode()))
+                except Exception as exc:
+                    log.error(f"Claude API error: {exc}")
+                    writer.write(_http_response("502 Bad Gateway", "application/json",
+                                                json.dumps({"error": f"API error: {exc}"}).encode()))
 
         elif path == "/reset" and method == "POST":
             for game in PORTS:
