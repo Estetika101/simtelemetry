@@ -1,0 +1,20 @@
+[Unit]
+Description=SimTelemetry UDP Listener
+After=network.target
+After=local-fs.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/simtelemetry
+ExecStart=/usr/bin/python3 /home/pi/simtelemetry/listener.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Give USB time to mount
+ExecStartPre=/bin/sleep 5
+
+[Install]
+WantedBy=multi-user.target
