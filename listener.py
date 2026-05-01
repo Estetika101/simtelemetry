@@ -660,6 +660,8 @@ state = {
     "tyre_compound":    None,
     "fuel_remaining_laps": None,
     "last_packet_at":   None,
+    # per-game raw UDP counters (arrive regardless of whether parse succeeds)
+    "udp_received": {"forza_motorsport": 0, "acc": 0, "f1": 0},
 }
 
 active_sessions: dict[str, Session] = {}
@@ -696,12 +698,23 @@ def update_state(game: str, session: Session, parsed: dict):
 
 class TelemetryProtocol(asyncio.DatagramProtocol):
     def __init__(self, game: str, parser):
-        self.game   = game
-        self.parser = parser
+        self.game         = game
+        self.parser       = parser
+        self._logged_size = False  # log unexpected packet size once per run
 
     def datagram_received(self, data: bytes, addr):
+        state["udp_received"][self.game] = state["udp_received"].get(self.game, 0) + 1
+
         parsed = self.parser(data)
         if not parsed:
+            if not self._logged_size:
+                self._logged_size = True
+                log.warning(
+                    f"[{self.game}] packet from {addr[0]} rejected — "
+                    f"size={len(data)} bytes (expected {FM_PACKET_SIZE} for forza, "
+                    f">=100 for acc, >={F1_HEADER_SIZE} for f1). "
+                    f"Check game Data Out format/port settings."
+                )
             return
 
         if self.game not in active_sessions:
@@ -868,6 +881,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <div class="slip-box"><div class="pos">RL slip</div><div class="val" id="slip-rl">—</div></div>
   <div class="slip-box"><div class="pos">RR slip</div><div class="val" id="slip-rr">—</div></div>
 </div>
+<div class="meta" id="udp-counters" style="margin-top:16px;font-size:0.65rem;color:#333"></div>
 <script>
 const $ = id => document.getElementById(id);
 const es = new EventSource('/stream');
@@ -893,6 +907,13 @@ es.onmessage = e => {
   $('best-meta').textContent = d.best_lap_time_s ? 'best ' + d.best_lap_time_s.toFixed(3) + 's' : 'best —';
   $('compound-meta').textContent = d.tyre_compound || '';
   $('drs-badge').className = d.drs ? 'on' : 'off';
+  const udp = d.udp_received || {};
+  const parts = ['forza_motorsport','acc','f1'].map(g => {
+    const n = udp[g] || 0;
+    const col = n > 0 ? '#22c55e' : '#333';
+    return `<span style="color:${col}">${g.replace('_',' ')}: ${n} udp</span>`;
+  });
+  $('udp-counters').innerHTML = parts.join('<span style="color:#222"> &nbsp;·&nbsp; </span>');
 };
 es.onerror = () => { $('dot').className = 'status-dot idle'; };
 </script>
