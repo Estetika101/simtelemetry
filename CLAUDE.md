@@ -56,7 +56,7 @@ FM_FORMAT_FH = FM_FORMAT + "ffffi"  # +tire_wear_fl/fr/rl/rr + track_ordinal
 
 ### Track Name Resolution (Forza)
 
-FH5 packets contain a `track_ordinal` integer at the end. Resolved via `FORZA_TRACKS` dict (ordinals 0–29). FM2023 does NOT include track in the UDP stream — it's not available in the protocol.
+FH5 packets contain a `track_ordinal` integer at the end. Resolved via `FORZA_TRACKS` dict. Ordinals are **non-sequential broadcast IDs** (not 0–N), e.g. Spa=23, Silverstone GP=53, Brands Hatch GP=60 — gaps between IDs are valid. FM2023 does NOT include track in the UDP stream — it's not available in the protocol.
 
 ### Driving Detection
 
