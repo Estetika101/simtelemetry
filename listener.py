@@ -132,11 +132,14 @@ def disk_info() -> dict:
 # FM2023 Data Out "Car Dash" packet: 311 bytes
 # Reference: https://support.forzamotorsport.net/hc/en-us/articles/21742934024211
 
-FM_PACKET_SIZE = 311
+FM_PACKET_SIZE    = 311  # Forza Motorsport 2023 / FM7 Car Dash
+FM_PACKET_SIZE_FH = 331  # Forza Horizon 4 / 5 Car Dash (adds tire wear + track ordinal)
 
 # i I [51×f] [5×i: car_ordinal/class/pi/drivetrain/cylinders] [17×f] H [6×B] [3×b]
 # drivetrain_type and num_cylinders are int32 per spec, not float.
-FM_FORMAT = "<iIfffffffffffffffffffffffffffffffffffffffffffffffffffiiiiifffffffffffffffffHBBBBBBbbb"
+FM_FORMAT    = "<iIfffffffffffffffffffffffffffffffffffffffffffffffffffiiiiifffffffffffffffffHBBBBBBbbb"
+# FH4/FH5 appends: tireWearFL tireWearFR tireWearRL tireWearRR (4f) + trackOrdinal (i)
+FM_FORMAT_FH = FM_FORMAT + "ffffi"
 
 FM_FIELDS = [
     "is_race_on", "timestamp_ms",
@@ -178,11 +181,21 @@ FM_FIELDS = [
 ]
 
 def parse_forza(data: bytes) -> Optional[dict]:
-    if len(data) != FM_PACKET_SIZE:
+    if len(data) == FM_PACKET_SIZE_FH:
+        fmt = FM_FORMAT_FH
+    elif len(data) == FM_PACKET_SIZE:
+        fmt = FM_FORMAT
+    else:
         return None
     try:
-        values = struct.unpack(FM_FORMAT, data)
+        values = struct.unpack(fmt, data)
         parsed = dict(zip(FM_FIELDS, values))
+        if len(data) == FM_PACKET_SIZE_FH:
+            parsed["tire_wear_fl"]   = values[len(FM_FIELDS)]
+            parsed["tire_wear_fr"]   = values[len(FM_FIELDS) + 1]
+            parsed["tire_wear_rl"]   = values[len(FM_FIELDS) + 2]
+            parsed["tire_wear_rr"]   = values[len(FM_FIELDS) + 3]
+            parsed["track_ordinal"]  = values[len(FM_FIELDS) + 4]
         parsed["speed_mph"]      = parsed["speed"] * 2.237
         parsed["throttle_pct"]   = parsed["accel"] / 255 * 100
         parsed["brake_pct"]      = parsed["brake"] / 255 * 100
@@ -742,7 +755,7 @@ class TelemetryProtocol(asyncio.DatagramProtocol):
                 log.warning(
                     f"[{self.game}] packet #{count} from {addr[0]} rejected — "
                     f"size={len(data)} bytes. "
-                    f"Forza expects {FM_PACKET_SIZE} (Car Dash format), "
+                    f"Forza expects {FM_PACKET_SIZE} (FM2023) or {FM_PACKET_SIZE_FH} (FH4/FH5), "
                     f"ACC expects >={100}, F1 expects >={F1_HEADER_SIZE}. "
                     f"Check Data Out settings."
                 )
