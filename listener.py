@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import shutil
+import urllib.parse
 import struct
 import time
 from datetime import datetime
@@ -49,8 +50,19 @@ def save_config(cfg: dict):
 config = load_config()
 
 # Convenience accessors — always read through config so runtime updates take effect
+_LOCAL_FALLBACK = Path(__file__).parent / "data"
+
 def storage_path() -> Path:
-    return Path(config["storage_path"])
+    """Return the active storage root, falling back to a local data/ dir if USB isn't mounted."""
+    p = Path(config["storage_path"])
+    if p.exists():
+        return p
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+    except OSError:
+        _LOCAL_FALLBACK.mkdir(parents=True, exist_ok=True)
+        return _LOCAL_FALLBACK
 
 PORTS             = config["ports"]          # used at bind time; port changes need restart
 SESSION_TIMEOUT_S = config["session_timeout_s"]
@@ -99,7 +111,9 @@ def disk_info() -> dict:
 
 FM_PACKET_SIZE = 311
 
-FM_FORMAT = "<iIfffffffffffffffffffffffffffffffffffffffffffffffffffIiifffffffffffffffHHBBBBBBBBBBbbbbffffHHHHHHHHH"
+# i I [51×f] [5×i: car_ordinal/class/pi/drivetrain/cylinders] [17×f] H [6×B] [3×b]
+# drivetrain_type and num_cylinders are int32 per spec, not float.
+FM_FORMAT = "<iIfffffffffffffffffffffffffffffffffffffffffffffffffffiiiiifffffffffffffffffHBBBBBBbbb"
 
 FM_FIELDS = [
     "is_race_on", "timestamp_ms",
@@ -487,11 +501,20 @@ class Session:
         self._motion_cache: dict = {}
 
         raw_path = storage_path() / "raw" / f"{self.session_id}.bin"
-        self.raw_file = open(raw_path, "wb")
-        log.info(f"Session started: {self.session_id}")
+        try:
+            self.raw_file = open(raw_path, "wb")
+        except OSError as e:
+            log.error(f"Cannot open raw archive {raw_path}: {e} — raw recording disabled")
+            self.raw_file = None
+        log.info(f"Session started: {self.session_id} (storage: {storage_path()})")
 
     def ingest(self, raw: bytes, parsed: dict):
-        self.raw_file.write(struct.pack("<I", len(raw)) + raw)
+        if self.raw_file:
+            try:
+                self.raw_file.write(struct.pack("<I", len(raw)) + raw)
+            except OSError as e:
+                log.error(f"Raw write failed: {e} — closing raw archive")
+                self.raw_file = None
         self.last_packet  = time.time()
         self.packet_count += 1
 
@@ -556,7 +579,11 @@ class Session:
         return time.time() - self.last_packet > SESSION_TIMEOUT_S
 
     def close(self) -> dict:
-        self.raw_file.close()
+        if self.raw_file:
+            try:
+                self.raw_file.close()
+            except OSError:
+                pass
 
         # Close current lap
         if self.current_lap and self.current_lap.samples:
@@ -586,18 +613,17 @@ class Session:
             "laps":             laps_summary,
         }
 
-        # Write summary JSON
-        out_path = storage_path() / "sessions" / f"{self.session_id}.json"
-        with open(out_path, "w") as f:
-            json.dump(session_data, f, indent=2)
+        try:
+            sp = storage_path()
+            out_path = sp / "sessions" / f"{self.session_id}.json"
+            with open(out_path, "w") as f:
+                json.dump(session_data, f, indent=2)
 
-        # Write full lap samples as separate file
-        samples_path = storage_path() / "sessions" / f"{self.session_id}_laps.json"
-        with open(samples_path, "w") as f:
-            json.dump(
-                [lap.to_dict() for lap in self.completed_laps],
-                f, indent=2,
-            )
+            samples_path = sp / "sessions" / f"{self.session_id}_laps.json"
+            with open(samples_path, "w") as f:
+                json.dump([lap.to_dict() for lap in self.completed_laps], f, indent=2)
+        except OSError as e:
+            log.error(f"Failed to write session files: {e}")
 
         log.info(
             f"Session closed: {self.session_id} | "
@@ -768,6 +794,27 @@ _PAGE_STYLE = """
   .ports-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
   .disk-info { font-size: 0.7rem; color: #555; margin-top: 8px; }
   .disk-info span { color: #888; }
+  /* file browser */
+  .path-row { display: flex; gap: 8px; }
+  .path-row input { flex: 1; min-width: 0; }
+  .btn-browse { background: #1a1a1f; border: 1px solid #2a2a3a; color: #777; font-family: inherit;
+    font-size: 0.75rem; padding: 8px 12px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+  .btn-browse:hover { border-color: #4a4a6a; color: #e0e0e0; }
+  .path-status { font-size: 0.7rem; margin-top: 5px; min-height: 1.2em; transition: color 0.2s; }
+  .browse-panel { background: #0a0a0e; border: 1px solid #1e1e2e; border-radius: 4px; margin-top: 8px; }
+  .browse-toolbar { display: flex; align-items: center; justify-content: space-between;
+    padding: 7px 10px; border-bottom: 1px solid #1a1a28; gap: 8px; }
+  .breadcrumb { font-size: 0.7rem; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .crumb { color: #555; cursor: pointer; } .crumb:hover { color: #aaa; }
+  .crumb-sep { color: #2a2a3a; } .crumb-cur { color: #888; }
+  .btn-use { background: #13132a; border: 1px solid #2a2a5a; color: #5a5acc; font-family: inherit;
+    font-size: 0.7rem; padding: 5px 10px; border-radius: 3px; cursor: pointer; white-space: nowrap; }
+  .btn-use:hover { background: #1e1e48; color: #9999ee; }
+  .dir-list { max-height: 200px; overflow-y: auto; }
+  .dir-item { display: flex; align-items: center; gap: 8px; padding: 7px 12px;
+    font-size: 0.75rem; color: #666; cursor: pointer; user-select: none; }
+  .dir-item:hover { background: #0f0f1e; color: #ccc; }
+  .dir-empty { padding: 14px 12px; font-size: 0.7rem; color: #333; text-align: center; }
 </style>
 """
 
@@ -875,7 +922,19 @@ SETUP_HTML = r"""<!DOCTYPE html>
   <div class="section-title">Storage</div>
   <div class="field">
     <label>Storage path — where raw archives and session JSON files are saved</label>
-    <input type="text" id="storage_path" placeholder="/mnt/usb/simtelemetry">
+    <div class="path-row">
+      <input type="text" id="storage_path" placeholder="/mnt/usb/simtelemetry"
+             oninput="scheduleValidate()" onblur="validateNow()">
+      <button type="button" class="btn-browse" onclick="toggleBrowse()">Browse</button>
+    </div>
+    <div id="path-status" class="path-status"></div>
+    <div id="browse-panel" class="browse-panel" style="display:none">
+      <div class="browse-toolbar">
+        <div id="breadcrumb" class="breadcrumb"></div>
+        <button type="button" class="btn-use" onclick="selectDir()">Use this directory</button>
+      </div>
+      <div id="dir-list" class="dir-list"></div>
+    </div>
     <div class="hint">USB mount point on Pi; any writable directory on Mac/Windows.</div>
   </div>
   <div id="disk-info" class="disk-info"></div>
@@ -911,15 +970,101 @@ SETUP_HTML = r"""<!DOCTYPE html>
 <div class="toast" id="toast"></div>
 
 <script>
+// ── path validation ──────────────────────────────────────────────────────────
+let _vTimer = null;
+function scheduleValidate() { clearTimeout(_vTimer); _vTimer = setTimeout(validateNow, 350); }
+function validateNow() { validatePath(document.getElementById('storage_path').value.trim()); }
+
+async function validatePath(path) {
+  const el = document.getElementById('path-status');
+  if (!path) { el.textContent = ''; return; }
+  el.style.color = '#555'; el.textContent = 'checking…';
+  try {
+    const d = await fetch('/browse?path=' + encodeURIComponent(path)).then(r => r.json());
+    if (d.exists) {
+      el.style.color = '#22c55e'; el.textContent = '✓ path exists';
+    } else if (d.parent_exists) {
+      el.style.color = '#f59e0b'; el.textContent = '⚠ will be created on save';
+    } else {
+      el.style.color = '#ef4444'; el.textContent = '✗ parent directory does not exist';
+    }
+  } catch(e) { el.style.color = '#444'; el.textContent = ''; }
+}
+
+// ── file browser ─────────────────────────────────────────────────────────────
+let _browseOpen = false;
+
+function toggleBrowse() {
+  _browseOpen = !_browseOpen;
+  document.getElementById('browse-panel').style.display = _browseOpen ? 'block' : 'none';
+  if (_browseOpen) loadPath(document.getElementById('storage_path').value.trim() || '/');
+}
+
+async function loadPath(path) {
+  const panel = document.getElementById('browse-panel');
+  const list  = document.getElementById('dir-list');
+  panel.dataset.cur = path;
+  list.innerHTML = '<div class="dir-empty">Loading…</div>';
+  try {
+    const d = await fetch('/browse?path=' + encodeURIComponent(path)).then(r => r.json());
+    panel.dataset.cur = d.path;
+    renderBreadcrumb(d.path);
+    list.innerHTML = '';
+    if (d.parent && d.parent !== d.path) {
+      const up = mkDir('↑  ..', () => loadPath(d.parent));
+      up.style.color = '#444';
+      list.appendChild(up);
+    }
+    if (!d.entries || !d.entries.length) {
+      list.innerHTML += '<div class="dir-empty">No subdirectories</div>';
+    }
+    (d.entries || []).forEach(e => {
+      const full = d.path.replace(/\/+$/, '') + '/' + e.name;
+      list.appendChild(mkDir('▸  ' + e.name, () => loadPath(full)));
+    });
+  } catch(e) {
+    list.innerHTML = '<div class="dir-empty" style="color:#ef4444">' + e.message + '</div>';
+  }
+}
+
+function mkDir(text, onclick) {
+  const el = document.createElement('div');
+  el.className = 'dir-item'; el.textContent = text; el.onclick = onclick;
+  return el;
+}
+
+function renderBreadcrumb(path) {
+  const bc = document.getElementById('breadcrumb');
+  const parts = path.split('/').filter(Boolean);
+  let html = '<span class="crumb" data-p="/">/</span>';
+  let built = '';
+  parts.forEach((seg, i) => {
+    built += '/' + seg;
+    html += '<span class="crumb-sep"> / </span>';
+    const cls = i === parts.length - 1 ? 'crumb-cur' : 'crumb';
+    html += '<span class="' + cls + '" data-p="' + built + '">' + seg + '</span>';
+  });
+  bc.innerHTML = html;
+  bc.querySelectorAll('.crumb').forEach(el => { el.onclick = () => loadPath(el.dataset.p); });
+}
+
+function selectDir() {
+  const path = document.getElementById('browse-panel').dataset.cur;
+  if (path) { document.getElementById('storage_path').value = path; validatePath(path); }
+  _browseOpen = false;
+  document.getElementById('browse-panel').style.display = 'none';
+}
+
+// ── config load / save ────────────────────────────────────────────────────────
 async function load() {
-  const r = await fetch('/config');
-  const d = await r.json();
-  document.getElementById('storage_path').value     = d.storage_path || '';
+  const d = await fetch('/config').then(r => r.json());
+  document.getElementById('storage_path').value      = d.storage_path || '';
   document.getElementById('session_timeout_s').value = d.session_timeout_s || 10;
   document.getElementById('port_forza').value        = (d.ports || {}).forza_motorsport || 5300;
   document.getElementById('port_acc').value          = (d.ports || {}).acc || 9996;
   document.getElementById('port_f1').value           = (d.ports || {}).f1 || 20777;
   renderDisk(d.disk);
+  if (d.storage_path) validatePath(d.storage_path);
 }
 
 function renderDisk(disk) {
@@ -934,8 +1079,7 @@ function renderDisk(disk) {
 async function save() {
   const btn = document.getElementById('save-btn');
   const toast = document.getElementById('toast');
-  btn.disabled = true;
-  toast.className = 'toast';
+  btn.disabled = true; toast.className = 'toast';
   const body = {
     storage_path:      document.getElementById('storage_path').value.trim(),
     session_timeout_s: parseInt(document.getElementById('session_timeout_s').value, 10),
@@ -949,17 +1093,12 @@ async function save() {
     const r = await fetch('/config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
     const d = await r.json();
     if (r.ok) {
-      toast.className = 'toast ok';
-      toast.textContent = d.message || 'Saved.';
-      renderDisk(d.disk);
+      toast.className = 'toast ok'; toast.textContent = d.message || 'Saved.';
+      renderDisk(d.disk); validatePath(body.storage_path);
     } else {
-      toast.className = 'toast err';
-      toast.textContent = d.error || 'Save failed.';
+      toast.className = 'toast err'; toast.textContent = d.error || 'Save failed.';
     }
-  } catch(e) {
-    toast.className = 'toast err';
-    toast.textContent = 'Network error: ' + e.message;
-  }
+  } catch(e) { toast.className = 'toast err'; toast.textContent = 'Network error: ' + e.message; }
   btn.disabled = false;
 }
 
@@ -995,9 +1134,11 @@ async def handle_status(reader, writer):
         header_str = header_bytes.decode("utf-8", errors="ignore")
         header_lines = header_str.split("\r\n")
         request_line = header_lines[0] if header_lines else ""
-        parts  = request_line.split(" ")
-        method = parts[0] if parts else "GET"
-        path   = parts[1].split("?")[0] if len(parts) > 1 else "/"
+        parts        = request_line.split(" ")
+        method       = parts[0] if parts else "GET"
+        raw_url      = parts[1] if len(parts) > 1 else "/"
+        path         = raw_url.split("?")[0]
+        query_string = raw_url.split("?", 1)[1] if "?" in raw_url else ""
 
         # Parse Content-Length so we read the full POST body
         content_length = 0
@@ -1069,6 +1210,37 @@ async def handle_status(reader, writer):
                 except Exception:
                     pass
             writer.write(_http_response("200 OK", "application/json", json.dumps(result, indent=2).encode()))
+
+        elif path == "/browse":
+            qs = {k: urllib.parse.unquote_plus(v)
+                  for pair in query_string.split("&") if "=" in pair
+                  for k, v in [pair.split("=", 1)]}
+            browse_path = qs.get("path", "/") or "/"
+            try:
+                p = Path(browse_path)
+                exists = p.is_dir()
+                entries = []
+                if exists:
+                    try:
+                        for item in sorted(p.iterdir()):
+                            if item.is_dir() and not item.name.startswith("."):
+                                entries.append({"name": item.name})
+                    except PermissionError:
+                        pass
+                result = {
+                    "path":          str(p.resolve()) if exists else str(p),
+                    "parent":        str(p.parent),
+                    "exists":        exists,
+                    "parent_exists": p.parent.is_dir(),
+                    "entries":       entries,
+                }
+            except Exception as exc:
+                result = {
+                    "path": browse_path, "parent": None,
+                    "exists": False, "parent_exists": False,
+                    "entries": [], "error": str(exc),
+                }
+            writer.write(_http_response("200 OK", "application/json", json.dumps(result).encode()))
 
         elif path == "/stream":
             writer.write(

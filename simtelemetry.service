@@ -1,7 +1,7 @@
 [Unit]
 Description=SimTelemetry UDP Listener
-After=network.target
-After=local-fs.target
+After=network.target local-fs.target
+# Listener falls back to local storage if USB isn't mounted, so no hard USB dep.
 
 [Service]
 Type=simple
@@ -10,11 +10,10 @@ WorkingDirectory=/home/pi/simtelemetry
 ExecStart=/usr/bin/python3 /home/pi/simtelemetry/listener.py
 Restart=always
 RestartSec=5
+# Never stop restarting regardless of how many failures occur.
+StartLimitIntervalSec=0
 StandardOutput=journal
 StandardError=journal
-
-# Give USB time to mount
-ExecStartPre=/bin/sleep 5
 
 [Install]
 WantedBy=multi-user.target
