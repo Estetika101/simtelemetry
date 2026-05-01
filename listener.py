@@ -27,6 +27,7 @@ CONFIG_FILE = Path(__file__).parent / "simtelemetry.config.json"
 DEFAULTS: dict = {
     "storage_path":     "/mnt/usb/simtelemetry",
     "session_timeout_s": 10,
+    "idle_timeout_s":    30,
     "status_port":      8000,
     "ports": {
         "forza_motorsport": 5300,
@@ -68,6 +69,7 @@ def storage_path() -> Path:
 
 PORTS             = config["ports"]          # used at bind time; port changes need restart
 SESSION_TIMEOUT_S = config["session_timeout_s"]
+IDLE_TIMEOUT_S    = config["idle_timeout_s"]
 STATUS_PORT       = config["status_port"]
 LOG_LEVEL         = logging.INFO
 
@@ -536,6 +538,8 @@ class Session:
         # Motion cache (F1 motion packets arrive separately from telemetry)
         self._motion_cache: dict = {}
 
+        self.last_activity = time.time()  # updated only when driver input is detected
+
         raw_path = storage_path() / "raw" / f"{self.session_id}.bin"
         try:
             self.raw_file = open(raw_path, "wb")
@@ -553,6 +557,9 @@ class Session:
                 self.raw_file = None
         self.last_packet  = time.time()
         self.packet_count += 1
+
+        if self._is_driving(parsed):
+            self.last_activity = self.last_packet
 
         packet_type = parsed.get("_packet_type")
 
@@ -611,8 +618,20 @@ class Session:
         self.current_lap_num = new_lap
         self.current_lap = LapRecord(new_lap)
 
+    def _is_driving(self, parsed: dict) -> bool:
+        """True when the player is actively doing something — not parked/in menu."""
+        return (
+            parsed.get("speed_mph", 0) > 2 or
+            parsed.get("throttle_pct", 0) > 2 or
+            parsed.get("brake_pct", 0) > 2 or
+            abs(parsed.get("steer", 0)) > 5
+        )
+
     def is_timed_out(self) -> bool:
         return time.time() - self.last_packet > SESSION_TIMEOUT_S
+
+    def is_idle_timed_out(self) -> bool:
+        return time.time() - self.last_activity > IDLE_TIMEOUT_S
 
     def close(self) -> dict:
         if self.raw_file:
@@ -707,7 +726,7 @@ active_sessions: dict[str, Session] = {}
 def update_state(game: str, session: Session, parsed: dict):
     if parsed.get("_packet_type") in ("motion", None) and "_packet_type" in parsed:
         return  # don't overwrite telemetry state with partial motion data
-    state["status"]       = "receiving"
+    state["status"]       = "receiving" if session._is_driving(parsed) else "idle"
     state["game"]         = game
     state["session_id"]   = session.session_id
     state["track"]        = session.track
@@ -786,12 +805,15 @@ class TelemetryProtocol(asyncio.DatagramProtocol):
 async def session_watchdog():
     while True:
         await asyncio.sleep(2)
-        to_close = [
-            game for game, session in active_sessions.items()
-            if session.is_timed_out()
-        ]
-        for game in to_close:
+        to_close = []
+        for game, session in active_sessions.items():
+            if session.is_timed_out():
+                to_close.append((game, "no packets"))
+            elif session.is_idle_timed_out():
+                to_close.append((game, "idle"))
+        for game, reason in to_close:
             session = active_sessions.pop(game)
+            log.info(f"[{game}] Closing session — {reason} for >{IDLE_TIMEOUT_S if reason == 'idle' else SESSION_TIMEOUT_S}s")
             session.close()
             if not active_sessions:
                 state["status"] = "idle"
@@ -1601,6 +1623,341 @@ function toggleStream() {
 """
 
 
+SESSIONS_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>SimTelemetry · Sessions</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d0d0f;color:#e0e0e0;font-family:'Courier New',monospace;display:flex;flex-direction:column;height:100vh;overflow:hidden}
+a{color:#888;text-decoration:none}a:hover{color:#ccc}
+.topbar{flex:none;padding:12px 20px;border-bottom:1px solid #1a1a28;display:flex;align-items:baseline;justify-content:space-between}
+.topbar h1{font-size:1.1rem;color:#aaa;letter-spacing:3px;text-transform:uppercase}
+.topbar nav a{margin-left:16px;font-size:0.75rem;color:#555}
+.topbar nav a.active{color:#e0e0e0;border-bottom:1px solid #e0e0e0}
+.layout{display:flex;flex:1;overflow:hidden}
+/* sidebar */
+.sidebar{width:270px;flex:none;border-right:1px solid #1a1a28;display:flex;flex-direction:column;overflow:hidden}
+.game-tabs{display:flex;flex:none;border-bottom:1px solid #1a1a28}
+.g-tab{flex:1;background:none;border:none;border-bottom:2px solid transparent;color:#444;font-family:inherit;font-size:0.65rem;padding:10px 4px;cursor:pointer;letter-spacing:1px;text-transform:uppercase}
+.g-tab.active{color:#22c55e;border-bottom-color:#22c55e}
+.g-tab:hover:not(.active){color:#888}
+.session-list{flex:1;overflow-y:auto}
+.s-item{padding:11px 14px;border-bottom:1px solid #0f0f16;cursor:pointer;border-left:2px solid transparent}
+.s-item:hover{background:#0e0e16}
+.s-item.active{background:#0a180e;border-left-color:#22c55e}
+.s-date{font-size:0.6rem;color:#383838;margin-bottom:2px}
+.s-track{font-size:0.78rem;color:#aaa;font-weight:bold;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.s-meta{display:flex;gap:10px;font-size:0.62rem;color:#404040}
+.s-best{color:#22c55e66}
+.no-s{padding:24px;font-size:0.72rem;color:#2a2a2a;text-align:center}
+/* main */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.sess-hdr{flex:none;padding:12px 20px;border-bottom:1px solid #1a1a28;display:flex;align-items:center;gap:20px;flex-wrap:wrap;display:none}
+.hdr-title{font-size:0.88rem;color:#ccc;font-weight:bold;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hdr-stat .v{font-size:1.05rem;color:#fff;font-weight:bold}
+.hdr-stat .l{font-size:0.58rem;color:#383838;text-transform:uppercase;letter-spacing:1px}
+.lap-bar{flex:none;display:flex;align-items:center;gap:6px;padding:7px 16px;border-bottom:1px solid #111118;overflow-x:auto;display:none}
+.lap-bar::-webkit-scrollbar{height:3px}.lap-bar::-webkit-scrollbar-thumb{background:#2a2a3a}
+.l-chip{background:#141418;border:1px solid #222230;color:#444;font-family:inherit;font-size:0.62rem;padding:4px 10px;border-radius:3px;cursor:pointer;white-space:nowrap;flex:none}
+.l-chip.active{background:#0a180e;border-color:#22c55e44;color:#22c55e}
+.l-chip:hover:not(.active){color:#aaa;border-color:#3a3a4a}
+.chart-area{flex:1;overflow-y:auto;overflow-x:hidden}
+.chart-area::-webkit-scrollbar{width:4px}.chart-area::-webkit-scrollbar-thumb{background:#1a1a2a}
+.c-row{position:relative;border-bottom:1px solid #0a0a12}
+.c-lbl{position:absolute;top:5px;left:10px;font-size:0.58rem;color:#2a2a3a;text-transform:uppercase;letter-spacing:1px;pointer-events:none;z-index:1;display:flex;gap:6px;align-items:center}
+.c-lbl span{padding:1px 5px;border-radius:2px}
+canvas{display:block;cursor:crosshair}
+.empty{display:flex;align-items:center;justify-content:center;flex:1;font-size:0.8rem;color:#252525}
+#tip{position:fixed;background:#0a0a12;border:1px solid #1e1e2e;border-radius:4px;padding:8px 12px;font-size:0.63rem;pointer-events:none;display:none;z-index:200;min-width:130px;line-height:1.8}
+.tr{display:flex;justify-content:space-between;gap:14px}
+.tk{color:#444}.tv{font-weight:bold}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>SimTelemetry</h1>
+  <nav>
+    <a href="/">Live</a>
+    <a href="/sessions" class="active">Sessions</a>
+    <a href="/setup">Setup</a>
+    <a href="/admin">Admin</a>
+  </nav>
+</div>
+<div class="layout">
+  <div class="sidebar">
+    <div class="game-tabs">
+      <button class="g-tab active" onclick="setGame('forza_motorsport',this)">Forza</button>
+      <button class="g-tab" onclick="setGame('acc',this)">ACC</button>
+      <button class="g-tab" onclick="setGame('f1',this)">F1</button>
+    </div>
+    <div class="session-list" id="slist"><div class="no-s">Loading…</div></div>
+  </div>
+  <div class="main">
+    <div class="sess-hdr" id="shdr"></div>
+    <div class="lap-bar" id="lbar"></div>
+    <div class="chart-area" id="carea"></div>
+    <div class="empty" id="empty">Select a session</div>
+  </div>
+</div>
+<div id="tip"></div>
+<script>
+const PAD = {l:52,r:10,t:22,b:18};
+const ROWS = [
+  {id:'spd', label:'Speed',  h:130, zero:false,
+   ch:[{key:'speed_mph',  color:'#d4d4d4', lbl:'mph'}], ymin:0, ymax:'auto'},
+  {id:'ped', label:'Throttle / Brake', h:110, zero:false,
+   ch:[{key:'throttle_pct',color:'#22c55e',lbl:'thr'},
+       {key:'brake_pct',   color:'#ef4444',lbl:'brk'}], ymin:0, ymax:100},
+  {id:'rpm', label:'RPM',    h:100, zero:false,
+   ch:[{key:'rpm',         color:'#a78bfa',lbl:'rpm'}], ymin:0, ymax:'auto'},
+  {id:'gr',  label:'Gear',   h:80,  zero:false, stepped:true,
+   ch:[{key:'gear',        color:'#f59e0b',lbl:'gear'}], ymin:-1, ymax:8},
+  {id:'gl',  label:'G-Lat',  h:100, zero:true,
+   ch:[{key:'g_lat',       color:'#22d3ee',lbl:'g'}], ymin:'auto',ymax:'auto'},
+  {id:'gn',  label:'G-Long', h:100, zero:true,
+   ch:[{key:'g_lon',       color:'#fb923c',lbl:'g'}], ymin:'auto',ymax:'auto'},
+];
+
+let _game='forza_motorsport', _sessions=[], _cur=null, _laps=[], _lapIdx=0;
+let _charts=[], _hT=null;
+
+async function init() {
+  try {
+    _sessions = await fetch('/sessions/data').then(r=>r.json());
+  } catch(e) { _sessions=[]; }
+  renderList();
+}
+
+function setGame(g,el) {
+  _game=g;
+  document.querySelectorAll('.g-tab').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  renderList();
+}
+
+function renderList() {
+  const el=document.getElementById('slist');
+  const list=[..._sessions].filter(s=>s.game===_game).reverse();
+  if(!list.length){el.innerHTML='<div class="no-s">No sessions</div>';return;}
+  el.innerHTML=list.map(s=>{
+    const dt=new Date(s.started_at).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+    const best=s.best_lap_time_s?fmtLap(s.best_lap_time_s):'--:--.---';
+    const laps=(s.laps||[]).length;
+    const act=_cur&&_cur.session_id===s.session_id?'active':'';
+    return `<div class="s-item ${act}" onclick="pick('${s.session_id}')">
+      <div class="s-date">${dt}</div>
+      <div class="s-track">${s.track&&s.track!=='unknown'?s.track:'Unknown Track'}</div>
+      <div class="s-meta"><span>${laps} lap${laps!==1?'s':''}</span><span class="s-best">${best}</span><span>${s.packet_count||0} pkt</span></div>
+    </div>`;
+  }).join('');
+}
+
+async function pick(id) {
+  _cur=_sessions.find(s=>s.session_id===id);
+  renderList();
+  try {
+    _laps=await fetch('/sessions/laps?id='+id).then(r=>r.json());
+  } catch(e){_laps=[];}
+  _lapIdx=0;
+  renderHeader();
+  renderLapBar();
+  renderCharts();
+  document.getElementById('empty').style.display='none';
+  document.getElementById('shdr').style.display='flex';
+  document.getElementById('lbar').style.display=_laps.length>1?'flex':'none';
+}
+
+function renderHeader() {
+  const s=_cur;
+  const best=s.best_lap_time_s?fmtLap(s.best_lap_time_s):'—';
+  const dt=new Date(s.started_at).toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+  const maxSpd=_laps.length?Math.max(..._laps.map(l=>l.max_speed_mph||0)).toFixed(0):'—';
+  document.getElementById('shdr').innerHTML=`
+    <div class="hdr-title">${s.track&&s.track!=='unknown'?s.track:'Unknown Track'}&nbsp;&middot;&nbsp;${s.game||''}</div>
+    <div class="hdr-stat"><div class="v">${best}</div><div class="l">Best Lap</div></div>
+    <div class="hdr-stat"><div class="v">${(_laps||[]).length}</div><div class="l">Laps</div></div>
+    <div class="hdr-stat"><div class="v">${maxSpd}</div><div class="l">Max mph</div></div>
+    <div class="hdr-stat" style="font-size:0.62rem;color:#333">${dt}</div>`;
+}
+
+function renderLapBar() {
+  document.getElementById('lbar').innerHTML=_laps.map((lap,i)=>{
+    const t=lap.lap_time_s?fmtLap(lap.lap_time_s):'—';
+    return `<button class="l-chip ${i===_lapIdx?'active':''}" onclick="selLap(${i})">Lap ${lap.lap_number}&nbsp;&nbsp;${t}</button>`;
+  }).join('');
+}
+
+function selLap(i) {
+  _lapIdx=i;
+  document.querySelectorAll('.l-chip').forEach((c,j)=>c.classList.toggle('active',j===i));
+  renderCharts();
+}
+
+function renderCharts() {
+  const lap=_laps[_lapIdx];
+  const area=document.getElementById('carea');
+  area.innerHTML=''; _charts=[];
+  if(!lap||!lap.samples||!lap.samples.length){area.innerHTML='<div class="no-s">No sample data for this lap</div>';return;}
+  const smp=lap.samples;
+  const tMax=smp[smp.length-1].t||1;
+  const dpr=window.devicePixelRatio||1;
+
+  ROWS.forEach(row=>{
+    let yMin=row.ymin==='auto'?Infinity:row.ymin;
+    let yMax=row.ymax==='auto'?-Infinity:row.ymax;
+    if(row.ymin==='auto'||row.ymax==='auto'){
+      smp.forEach(s=>row.ch.forEach(c=>{
+        const v=s[c.key];if(v==null)return;
+        if(row.ymin==='auto')yMin=Math.min(yMin,v);
+        if(row.ymax==='auto')yMax=Math.max(yMax,v);
+      }));
+      if(row.zero){yMin=Math.min(yMin,0);yMax=Math.max(yMax,0);}
+      const pad=(yMax-yMin)*0.12||1;
+      if(row.ymin==='auto')yMin-=pad;
+      if(row.ymax==='auto')yMax+=pad;
+    }
+    if(yMin===yMax)yMax=yMin+1;
+
+    const wrap=document.createElement('div');
+    wrap.className='c-row';wrap.style.height=row.h+'px';
+
+    const lbl=document.createElement('div');
+    lbl.className='c-lbl';
+    lbl.innerHTML=row.ch.map(c=>`<span style="color:${c.color}88">${c.lbl}</span>`).join('');
+
+    const cv=document.createElement('canvas');
+    cv.style.height=row.h+'px';cv.height=row.h*dpr;
+
+    wrap.appendChild(lbl);wrap.appendChild(cv);area.appendChild(wrap);
+    const ctx={cv,row,smp,yMin,yMax,tMax};
+    _charts.push(ctx);
+
+    cv.addEventListener('mousemove',e=>onHover(e,ctx));
+    cv.addEventListener('mouseleave',()=>{
+      _hT=null;
+      _charts.forEach(c=>draw(c,null));
+      document.getElementById('tip').style.display='none';
+    });
+  });
+
+  requestAnimationFrame(()=>{
+    _charts.forEach(ctx=>{
+      const w=ctx.cv.parentElement.clientWidth;
+      ctx.cv.width=w*dpr;ctx.cv.style.width=w+'px';
+      draw(ctx,null);
+    });
+  });
+}
+
+function draw(ctx,hT) {
+  const {cv,row,smp,yMin,yMax,tMax}=ctx;
+  const dpr=window.devicePixelRatio||1;
+  const W=cv.width,H=cv.height;
+  const {l,r,t,b}=PAD;
+  const ox=l*dpr,oy=t*dpr,pw=W-(l+r)*dpr,ph=H-(t+b)*dpr;
+  const c=cv.getContext('2d');
+  c.clearRect(0,0,W,H);
+  c.fillStyle='#050508';c.fillRect(0,0,W,H);
+
+  // grid lines + y-axis labels
+  const ticks=3;
+  for(let i=0;i<=ticks;i++){
+    const gy=oy+ph*(1-i/ticks);
+    c.strokeStyle='#0e0e18';c.lineWidth=1;
+    c.beginPath();c.moveTo(ox,gy);c.lineTo(ox+pw,gy);c.stroke();
+    const val=yMin+(yMax-yMin)*(i/ticks);
+    c.fillStyle='#2a2a3a';c.font=`${8.5*dpr}px "Courier New",monospace`;c.textAlign='right';
+    c.fillText(fmtN(val,row),(l-4)*dpr,gy+3*dpr);
+  }
+
+  // zero line
+  if(row.zero){
+    const zy=oy+ph*(1-(0-yMin)/(yMax-yMin));
+    c.strokeStyle='#1a1a2a';c.lineWidth=1;
+    c.beginPath();c.moveTo(ox,zy);c.lineTo(ox+pw,zy);c.stroke();
+  }
+
+  // traces
+  row.ch.forEach(ch=>{
+    c.strokeStyle=ch.color;c.lineWidth=1.5*dpr;c.lineJoin='round';c.lineCap='round';
+    c.beginPath();
+    let first=true,prevY=null;
+    smp.forEach(s=>{
+      const v=s[ch.key];if(v==null)return;
+      const x=ox+(s.t/tMax)*pw;
+      const y=oy+ph*(1-clamp((v-yMin)/(yMax-yMin),0,1));
+      if(first){c.moveTo(x,y);first=false;}
+      else if(row.stepped&&prevY!=null){c.lineTo(x,prevY);c.lineTo(x,y);}
+      else c.lineTo(x,y);
+      prevY=y;
+    });
+    c.stroke();
+  });
+
+  // cursor
+  if(hT!=null){
+    const cx=ox+hT*pw;
+    c.strokeStyle='#ffffff18';c.lineWidth=1;
+    c.setLineDash([3*dpr,3*dpr]);
+    c.beginPath();c.moveTo(cx,oy);c.lineTo(cx,oy+ph);c.stroke();
+    c.setLineDash([]);
+    row.ch.forEach(ch=>{
+      const s=smpAt(smp,hT*tMax);if(!s)return;
+      const v=s[ch.key];if(v==null)return;
+      const y=oy+ph*(1-clamp((v-yMin)/(yMax-yMin),0,1));
+      c.fillStyle=ch.color;c.beginPath();c.arc(cx,y,3*dpr,0,Math.PI*2);c.fill();
+    });
+  }
+}
+
+function onHover(e,ctx) {
+  const {cv,smp,tMax}=ctx;
+  const dpr=window.devicePixelRatio||1;
+  const rect=cv.getBoundingClientRect();
+  const pw=cv.width-(PAD.l+PAD.r)*dpr;
+  const hT=clamp((( e.clientX-rect.left)*dpr-PAD.l*dpr)/pw,0,1);
+  _hT=hT;
+  _charts.forEach(c=>draw(c,hT));
+
+  const s=smpAt(smp,hT*tMax);if(!s)return;
+  const tip=document.getElementById('tip');
+  const rows=[
+    {k:'time', v:s.t!=null?s.t.toFixed(2)+'s':'—', col:'#666'},
+    {k:'speed',v:(s.speed_mph||0).toFixed(1)+' mph',col:'#d4d4d4'},
+    {k:'thr',  v:(s.throttle_pct||0).toFixed(0)+'%', col:'#22c55e'},
+    {k:'brk',  v:(s.brake_pct||0).toFixed(0)+'%',    col:'#ef4444'},
+    {k:'gear', v:s.gear!=null?(s.gear===-1?'R':s.gear===0?'N':s.gear):'—', col:'#f59e0b'},
+    {k:'rpm',  v:s.rpm!=null?Math.round(s.rpm):'—', col:'#a78bfa'},
+    {k:'g_lat',v:(s.g_lat||0).toFixed(2)+'g',       col:'#22d3ee'},
+    {k:'g_lon',v:(s.g_lon||0).toFixed(2)+'g',       col:'#fb923c'},
+  ];
+  tip.innerHTML=rows.map(r=>`<div class="tr"><span class="tk">${r.k}</span><span class="tv" style="color:${r.col}">${r.v}</span></div>`).join('');
+  tip.style.display='block';
+  const tx=e.clientX+18, ty=e.clientY-8;
+  tip.style.left=(tx+150>window.innerWidth?e.clientX-162:tx)+'px';
+  tip.style.top=Math.min(ty,window.innerHeight-220)+'px';
+}
+
+function smpAt(smp,t) {
+  let lo=0,hi=smp.length-1;
+  while(lo<hi){const m=(lo+hi)>>1;if(smp[m].t<t)lo=m+1;else hi=m;}
+  return smp[lo]||null;
+}
+function clamp(v,a,b){return v<a?a:v>b?b:v;}
+function fmtLap(s){const m=Math.floor(s/60);return m+':'+(s%60).toFixed(3).padStart(6,'0');}
+function fmtN(v){if(Math.abs(v)>=1000)return Math.round(v);if(Math.abs(v)>=10)return v.toFixed(1);return v.toFixed(2);}
+
+window.addEventListener('resize',()=>{if(_laps.length)renderCharts();});
+init();
+</script>
+</body>
+</html>
+"""
+
+
 def _http_response(status: str, content_type: str, body: bytes, extra_headers: str = "") -> bytes:
     return (
         f"HTTP/1.1 {status}\r\n"
@@ -1692,16 +2049,30 @@ async def handle_status(reader, writer):
         elif path == "/status":
             writer.write(_http_response("200 OK", "application/json", json.dumps(state, indent=2).encode()))
 
-        elif path == "/sessions":
+        elif path in ("/sessions", "/sessions/"):
+            writer.write(_http_response("200 OK", "text/html", SESSIONS_HTML.encode()))
+
+        elif path == "/sessions/data":
             sessions_dir = storage_path() / "sessions"
-            files = sorted(sessions_dir.glob("*_[!l]*.json"))  # exclude _laps.json
+            files = sorted(sessions_dir.glob("*_[!l]*.json"))
             result = []
-            for f in files[-50:]:
+            for f in files[-100:]:
                 try:
                     result.append(json.loads(f.read_text()))
                 except Exception:
                     pass
-            writer.write(_http_response("200 OK", "application/json", json.dumps(result, indent=2).encode()))
+            writer.write(_http_response("200 OK", "application/json", json.dumps(result).encode()))
+
+        elif path == "/sessions/laps":
+            qs = {k: urllib.parse.unquote_plus(v)
+                  for pair in query_string.split("&") if "=" in pair
+                  for k, v in [pair.split("=", 1)]}
+            sid = qs.get("id", "")
+            laps_file = storage_path() / "sessions" / f"{sid}_laps.json"
+            try:
+                writer.write(_http_response("200 OK", "application/json", laps_file.read_bytes()))
+            except OSError:
+                writer.write(_http_response("404 Not Found", "application/json", b"[]"))
 
         elif path == "/reset" and method == "POST":
             for game in PORTS:
