@@ -706,6 +706,7 @@ state = {
     "brake_pct":        0,
     "gear":             0,
     "rpm":              0,
+    "engine_max_rpm":   0,
     "steer":            0,
     "slip_rl":          0,
     "slip_rr":          0,
@@ -740,7 +741,9 @@ def update_state(game: str, session: Session, parsed: dict):
     state["throttle_pct"] = parsed.get("throttle_pct", state["throttle_pct"])
     state["brake_pct"]    = parsed.get("brake_pct", state["brake_pct"])
     state["gear"]         = parsed.get("gear", state["gear"])
-    state["rpm"]          = parsed.get("rpm", parsed.get("current_engine_rpm", state["rpm"]))
+    state["rpm"]            = parsed.get("rpm", parsed.get("current_engine_rpm", state["rpm"]))
+    if parsed.get("engine_max_rpm", 0) > 2000:
+        state["engine_max_rpm"] = parsed["engine_max_rpm"]
     state["steer"]        = round(parsed.get("steer", state["steer"]), 3)
     state["slip_rl"]      = round(parsed.get("slip_ratio_rl", state["slip_rl"]), 4)
     state["slip_rr"]      = round(parsed.get("slip_ratio_rr", state["slip_rr"]), 4)
@@ -802,6 +805,12 @@ class TelemetryProtocol(asyncio.DatagramProtocol):
 
 # ─── Session Watchdog ─────────────────────────────────────────────────────────
 
+async def _clear_race_ended():
+    await asyncio.sleep(30)
+    if state["status"] == "race_ended":
+        state["status"] = "idle"
+
+
 async def session_watchdog():
     while True:
         await asyncio.sleep(2)
@@ -816,9 +825,10 @@ async def session_watchdog():
             log.info(f"[{game}] Closing session — {reason} for >{IDLE_TIMEOUT_S if reason == 'idle' else SESSION_TIMEOUT_S}s")
             session.close()
             if not active_sessions:
-                state["status"] = "idle"
+                state["status"] = "race_ended"
                 state["game"]   = None
                 log.info("All sessions closed. Listening...")
+                asyncio.create_task(_clear_race_ended())
 
 # ─── Admin Packet Injection ───────────────────────────────────────────────────
 
@@ -1015,198 +1025,290 @@ _PAGE_STYLE = """
 </style>
 """
 
-DASHBOARD_HTML = r"""<!DOCTYPE html>
+DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>SimTelemetry</title>
-""" + _PAGE_STYLE + r"""
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex;flex-direction:column;user-select:none}
+
+/* ── topbar ── */
+.tb{flex:none;height:40px;display:flex;align-items:center;padding:0 18px;gap:14px;border-bottom:1px solid #0f0f0f}
+.dot{width:7px;height:7px;border-radius:50%;flex:none;background:#1a1a1a}
+.dot.receiving{background:#00ff41;box-shadow:0 0 7px #00ff41;animation:p 1s infinite}
+.dot.idle{background:#2a2a2a}
+.dot.race_ended{background:#f59e0b}
+@keyframes p{0%,100%{opacity:1}50%{opacity:.4}}
+.tb-stat{font-size:.65rem;letter-spacing:2px;text-transform:uppercase;color:#2a2a2a;min-width:72px}
+.tb-stat.receiving{color:#00ff41}
+.tb-stat.race_ended{color:#f59e0b}
+.tb-meta{display:flex;gap:18px;flex:1;font-size:.68rem;letter-spacing:1px;overflow:hidden}
+.tb-game{color:#555;text-transform:uppercase}
+.tb-track{color:#888;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tb-lap{color:#444}
+.tb-best{color:#22c55e}
+.tb-drs{color:#00ff41;font-weight:bold;display:none}
+.tb-cmp{color:#555}
+.tb-nav{display:flex;gap:14px;flex:none}
+.tb-nav a{font-size:.62rem;color:#222;text-decoration:none;letter-spacing:1px;text-transform:uppercase}
+.tb-nav a:hover{color:#666}
+.tb-nav a.cur{color:#555;border-bottom:1px solid #333}
+
+/* ── main grid ── */
+.main{flex:1;display:flex;flex-direction:column;min-height:0}
+
+/* big 3 stats */
+.big-row{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1.1fr 1fr}
+.big-cell{display:flex;flex-direction:column;justify-content:center;align-items:center;padding:12px 8px}
+.big-cell.center{border-left:1px solid #0f0f0f;border-right:1px solid #0f0f0f}
+.big-lbl{font-size:.6rem;color:#222;text-transform:uppercase;letter-spacing:3px;margin-bottom:6px}
+.big-num{font-size:clamp(3.5rem,10vw,7.5rem);font-weight:900;line-height:1;color:#fff;letter-spacing:-2px}
+.big-unit{font-size:.62rem;color:#222;text-transform:uppercase;letter-spacing:3px;margin-top:5px}
+.gear-num{font-size:clamp(7rem,20vw,15rem);font-weight:900;line-height:.9;color:#fff}
+.gear-num.N{color:#444}
+.gear-num.R{color:#ef4444}
+
+/* rev bar */
+.rev-row{flex:none;height:22px;position:relative;background:#060606;border-top:1px solid #0f0f0f;border-bottom:1px solid #0f0f0f;overflow:hidden}
+.rev-fill{position:absolute;top:0;left:0;height:100%;width:0%;transition:width .04s linear;background:#1a4d28}
+.rev-fill.lo{background:#1a6630}
+.rev-fill.mid{background:#22c55e}
+.rev-fill.hi{background:#f59e0b}
+.rev-fill.shift{background:#ef4444;animation:sf .12s infinite}
+@keyframes sf{0%,100%{opacity:1;box-shadow:0 0 20px #ef4444}50%{opacity:.7;box-shadow:0 0 40px #ff4400}}
+.rev-label{position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:.55rem;color:#1a1a1a;letter-spacing:2px}
+
+/* pedal bars */
+.ped-row{flex:none;display:flex;gap:0;border-bottom:1px solid #0f0f0f}
+.ped{flex:1;padding:10px 16px;border-right:1px solid #0a0a0a}
+.ped:last-child{border-right:none}
+.ped-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+.ped-name{font-size:.58rem;color:#1e1e1e;text-transform:uppercase;letter-spacing:2px}
+.ped-pct{font-size:1rem;font-weight:900;min-width:3ch;text-align:right}
+.ped-bg{height:14px;background:#0a0a0a;border-radius:2px;overflow:hidden}
+.ped-fill{height:100%;width:0%;border-radius:2px;transition:width .04s linear}
+.thr .ped-pct{color:#00ff41}.thr .ped-fill{background:#00ff41}
+.brk .ped-pct{color:#ef4444}.brk .ped-fill{background:#ef4444}
+.clt .ped-pct{color:#f59e0b}.clt .ped-fill{background:#f59e0b}
+
+/* secondary stats */
+.sec-row{flex:none;display:flex;border-bottom:1px solid #080808}
+.sec{flex:1;padding:8px 12px;text-align:center;border-right:1px solid #0a0a0a}
+.sec:last-child{border-right:none}
+.sec-lbl{font-size:.55rem;color:#1a1a1a;text-transform:uppercase;letter-spacing:2px;margin-bottom:3px}
+.sec-val{font-size:clamp(1rem,2.5vw,1.6rem);font-weight:bold;color:#888}
+
+/* bottom strip */
+.bot{flex:none;height:28px;display:flex;align-items:center;padding:0 14px;gap:10px;background:#000}
+.udp-strip{flex:1;font-size:.55rem;color:#151515;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.bot-btn{background:none;border:1px solid #111;color:#222;font-family:inherit;font-size:.55rem;padding:2px 8px;border-radius:2px;cursor:pointer;text-transform:uppercase;letter-spacing:1px}
+.bot-btn:hover{color:#666;border-color:#333}
+.bot-btn.on{color:#00ff41;border-color:#00ff4133}
+
+/* debug overlay */
+#dbg{position:fixed;bottom:28px;left:0;right:0;height:230px;background:#03030a;border-top:1px solid #111;z-index:50;display:none;flex-direction:column}
+#dbg .dh{flex:none;display:flex;justify-content:space-between;align-items:center;padding:5px 12px;border-bottom:1px solid #0d0d18}
+#dbg .dh span{font-size:.55rem;color:#252525;text-transform:uppercase;letter-spacing:2px}
+#dbg-log{flex:1;overflow-y:auto;font-size:.66rem;padding:6px 12px;font-family:'Courier New',monospace;line-height:1.6}
+</style>
 </head>
 <body>
-<div class="topbar">
-  <h1>SimTelemetry <span class="status-dot idle" id="dot"></span><span id="status-text">idle</span></h1>
-  <nav>
-    <a href="/" class="active">Live</a>
+<div class="tb">
+  <div class="dot" id="dot"></div>
+  <span class="tb-stat" id="tb-stat">IDLE</span>
+  <div class="tb-meta">
+    <span class="tb-game" id="tb-game">—</span>
+    <span class="tb-track" id="tb-track">—</span>
+    <span class="tb-lap" id="tb-lap">LAP —</span>
+    <span class="tb-best" id="tb-best">BEST —</span>
+    <span class="tb-drs" id="tb-drs">DRS</span>
+    <span class="tb-cmp" id="tb-cmp"></span>
+  </div>
+  <nav class="tb-nav">
+    <a href="/" class="cur">Live</a>
     <a href="/sessions">Sessions</a>
     <a href="/setup">Setup</a>
     <a href="/admin">Admin</a>
   </nav>
 </div>
-<div class="meta">
-  <span id="game-meta">—</span>
-  <span id="track-meta">—</span>
-  <span id="lap-meta">lap —</span>
-  <span id="best-meta">best —</span>
-  <span id="compound-meta"></span>
-  <span id="drs-badge" class="off">DRS</span>
-</div>
-<div class="grid">
-  <div class="card"><div class="label">Speed</div><div class="value" id="speed">—</div><span class="unit">mph</span></div>
-  <div class="card"><div class="label">Gear</div><div class="value" id="gear">—</div></div>
-  <div class="card"><div class="label">RPM</div><div class="value" id="rpm">—</div></div>
-  <div class="card"><div class="label">G-Lat</div><div class="value" id="glat">—</div><span class="unit">g</span></div>
-  <div class="card"><div class="label">G-Lon</div><div class="value" id="glon">—</div><span class="unit">g</span></div>
-</div>
-<div class="bar-row bar-throttle">
-  <div class="bar-label"><span>Throttle</span><span id="thr-pct">0%</span></div>
-  <div class="bar-bg"><div class="bar-fill" id="thr-bar" style="width:0%"></div></div>
-</div>
-<div class="bar-row bar-brake">
-  <div class="bar-label"><span>Brake</span><span id="brk-pct">0%</span></div>
-  <div class="bar-bg"><div class="bar-fill" id="brk-bar" style="width:0%"></div></div>
-</div>
-<div class="bar-row bar-clutch">
-  <div class="bar-label"><span>Clutch</span><span id="clt-pct">0%</span></div>
-  <div class="bar-bg"><div class="bar-fill" id="clt-bar" style="width:0%"></div></div>
-</div>
-<div class="slip-grid">
-  <div class="slip-box"><div class="pos">FL slip</div><div class="val" id="slip-fl">—</div></div>
-  <div class="slip-box"><div class="pos">FR slip</div><div class="val" id="slip-fr">—</div></div>
-  <div class="slip-box"><div class="pos">RL slip</div><div class="val" id="slip-rl">—</div></div>
-  <div class="slip-box"><div class="pos">RR slip</div><div class="val" id="slip-rr">—</div></div>
-</div>
-<div style="margin-top:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-  <div class="meta" id="udp-counters" style="font-size:0.65rem;color:#333;flex:1"></div>
-  <button onclick="resetCounters()" style="background:#1a1a1f;border:1px solid #2a2a3a;color:#555;font-family:inherit;font-size:0.65rem;padding:4px 10px;border-radius:3px;cursor:pointer" onmouseover="this.style.color='#aaa'" onmouseout="this.style.color='#555'">Reset</button>
-  <button onclick="toggleDebug()" id="dbg-btn" style="background:#1a1a1f;border:1px solid #2a2a3a;color:#555;font-family:inherit;font-size:0.65rem;padding:4px 10px;border-radius:3px;cursor:pointer" onmouseover="this.style.color='#aaa'" onmouseout="if(!_dbgOpen)this.style.color='#555'">Debug</button>
-</div>
-<div id="debug-panel" style="display:none;margin-top:10px">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-    <span style="font-size:0.6rem;color:#444;text-transform:uppercase;letter-spacing:2px">Debug Console</span>
-    <div style="display:flex;gap:10px;align-items:center">
-      <label style="font-size:0.6rem;color:#444;cursor:pointer;display:flex;align-items:center;gap:4px">
-        <input type="checkbox" id="dbg-autoscroll" checked> autoscroll
-      </label>
-      <select id="dbg-filter" onchange="applyFilter()" style="background:#1a1a1f;border:1px solid #1e1e28;color:#555;font-family:inherit;font-size:0.6rem;padding:2px 6px;border-radius:3px">
-        <option value="all">All</option>
-        <option value="warn">Warnings+</option>
-        <option value="udp">UDP only</option>
-      </select>
-      <button onclick="clearDebug()" style="background:#1a1a1f;border:1px solid #1e1e28;color:#444;font-family:inherit;font-size:0.6rem;padding:3px 8px;border-radius:3px;cursor:pointer">Clear</button>
+
+<div class="main">
+  <div class="big-row">
+    <div class="big-cell">
+      <div class="big-lbl">Speed</div>
+      <div class="big-num" id="spd">—</div>
+      <div class="big-unit">mph</div>
+    </div>
+    <div class="big-cell center">
+      <div class="big-lbl">Gear</div>
+      <div class="gear-num" id="gear">—</div>
+    </div>
+    <div class="big-cell">
+      <div class="big-lbl">RPM</div>
+      <div class="big-num" id="rpm">—</div>
+      <div class="big-unit" id="rpm-sub"></div>
     </div>
   </div>
-  <div id="debug-log" style="background:#050508;border:1px solid #111118;border-radius:4px;height:260px;overflow-y:auto;font-size:0.68rem;padding:8px 10px;font-family:'Courier New',monospace;line-height:1.6"></div>
+
+  <div class="rev-row">
+    <div class="rev-fill" id="rev"></div>
+    <div class="rev-label">REV</div>
+  </div>
+
+  <div class="ped-row">
+    <div class="ped thr">
+      <div class="ped-top"><span class="ped-name">Throttle</span><span class="ped-pct" id="thr-v">0%</span></div>
+      <div class="ped-bg"><div class="ped-fill" id="thr-b"></div></div>
+    </div>
+    <div class="ped brk">
+      <div class="ped-top"><span class="ped-name">Brake</span><span class="ped-pct" id="brk-v">0%</span></div>
+      <div class="ped-bg"><div class="ped-fill" id="brk-b"></div></div>
+    </div>
+    <div class="ped clt">
+      <div class="ped-top"><span class="ped-name">Clutch</span><span class="ped-pct" id="clt-v">0%</span></div>
+      <div class="ped-bg"><div class="ped-fill" id="clt-b"></div></div>
+    </div>
+  </div>
+
+  <div class="sec-row">
+    <div class="sec"><div class="sec-lbl">G-Lat</div><div class="sec-val" id="glat">—</div></div>
+    <div class="sec"><div class="sec-lbl">G-Lon</div><div class="sec-val" id="glon">—</div></div>
+    <div class="sec"><div class="sec-lbl">Slip RL</div><div class="sec-val" id="srl">—</div></div>
+    <div class="sec"><div class="sec-lbl">Slip RR</div><div class="sec-val" id="srr">—</div></div>
+    <div class="sec"><div class="sec-lbl">Fuel Laps</div><div class="sec-val" id="fuel">—</div></div>
+    <div class="sec"><div class="sec-lbl">Tyre</div><div class="sec-val" id="tyre" style="font-size:.9rem">—</div></div>
+  </div>
 </div>
+
+<div class="bot">
+  <div class="udp-strip" id="udp-strip"></div>
+  <button class="bot-btn" onclick="resetCounters()">Reset</button>
+  <button class="bot-btn" id="dbg-btn" onclick="toggleDebug()">Debug</button>
+</div>
+
+<div id="dbg">
+  <div class="dh">
+    <span>Debug Console</span>
+    <div style="display:flex;gap:10px;align-items:center">
+      <label style="font-size:.58rem;color:#333;cursor:pointer;display:flex;align-items:center;gap:4px"><input type="checkbox" id="dbg-as" checked> scroll</label>
+      <select id="dbg-f" onchange="applyFilter()" style="background:#0a0a12;border:1px solid #1a1a28;color:#444;font-family:inherit;font-size:.58rem;padding:2px 6px;border-radius:2px">
+        <option value="all">All</option><option value="warn">Warn+</option><option value="udp">UDP</option>
+      </select>
+      <button onclick="clearDebug()" style="background:none;border:1px solid #1a1a28;color:#333;font-family:inherit;font-size:.58rem;padding:2px 8px;border-radius:2px;cursor:pointer">Clear</button>
+    </div>
+  </div>
+  <div id="dbg-log"></div>
+</div>
+
 <script>
-const $ = id => document.getElementById(id);
-const es = new EventSource('/stream');
-es.onmessage = e => {
-  const d = JSON.parse(e.data);
-  $('dot').className = 'status-dot ' + (d.status || 'idle');
-  $('status-text').textContent = d.status || 'idle';
-  $('speed').textContent = d.speed_mph != null ? d.speed_mph.toFixed(1) : '—';
-  $('gear').textContent = d.gear != null ? (d.gear === 0 ? 'N' : d.gear === -1 ? 'R' : d.gear) : '—';
-  $('rpm').textContent = d.rpm != null ? Math.round(d.rpm) : '—';
-  $('glat').textContent = d.g_lat != null ? d.g_lat.toFixed(2) : '—';
-  $('glon').textContent = d.g_lon != null ? d.g_lon.toFixed(2) : '—';
-  const thr = d.throttle_pct || 0, brk = d.brake_pct || 0, clt = d.clutch_pct || 0;
-  $('thr-bar').style.width = thr + '%'; $('thr-pct').textContent = thr.toFixed(0) + '%';
-  $('brk-bar').style.width = brk + '%'; $('brk-pct').textContent = brk.toFixed(0) + '%';
-  $('clt-bar').style.width = clt + '%'; $('clt-pct').textContent = clt.toFixed(0) + '%';
-  $('slip-rl').textContent = d.slip_rl != null ? d.slip_rl.toFixed(3) : '—';
-  $('slip-rr').textContent = d.slip_rr != null ? d.slip_rr.toFixed(3) : '—';
-  $('slip-fl').textContent = '—'; $('slip-fr').textContent = '—';
-  $('game-meta').textContent = d.game || '—';
-  $('track-meta').textContent = d.track || '—';
-  $('lap-meta').textContent = 'lap ' + (d.lap != null ? d.lap : '—');
-  $('best-meta').textContent = d.best_lap_time_s ? 'best ' + d.best_lap_time_s.toFixed(3) + 's' : 'best —';
-  $('compound-meta').textContent = d.tyre_compound || '';
-  $('drs-badge').className = d.drs ? 'on' : 'off';
-  const udp = d.udp_received || {};
-  const rej = d.udp_rejected || {};
-  const rsz = d.last_rejected_size || {};
-  const parts = ['forza_motorsport','acc','f1'].map(g => {
-    const n = udp[g] || 0, r = rej[g] || 0;
-    const col = n > 0 ? '#22c55e' : (r > 0 ? '#ef4444' : '#333');
-    const label = g.replace('_',' ');
-    let txt = `<span style="color:${col}">${label}: ${n} ok`;
-    if (r > 0) txt += ` / <span style="color:#ef4444">${r} rejected`;
-    if (rsz[g]) txt += ` (${rsz[g]}B)`;
-    if (r > 0) txt += `</span>`;
-    txt += `</span>`;
-    return txt;
-  });
-  $('udp-counters').innerHTML = parts.join('<span style="color:#222"> &nbsp;·&nbsp; </span>');
+const $=id=>document.getElementById(id);
+const es=new EventSource('/stream');
+let _maxRpm=8500, _dbgEs=null, _dbgOpen=false;
+const _dbgLines=[];
+
+es.onmessage=e=>{
+  const d=JSON.parse(e.data);
+  const recv=d.status==='receiving';
+  const ended=d.status==='race_ended';
+
+  $('dot').className='dot '+(recv?'receiving':ended?'race_ended':'idle');
+  $('tb-stat').textContent=ended?'RACE ENDED':(d.status||'idle').toUpperCase();
+  $('tb-stat').className='tb-stat'+(recv?' receiving':ended?' race_ended':'');
+  $('tb-game').textContent=d.game?d.game.replace(/_/g,' ').toUpperCase():'—';
+  $('tb-track').textContent=d.track&&d.track!=='unknown'?d.track:'—';
+  $('tb-lap').textContent='LAP '+(d.lap??'—');
+  $('tb-best').textContent=d.best_lap_time_s?'BEST '+fmt(d.best_lap_time_s):'BEST —';
+  $('tb-drs').style.display=d.drs?'':'none';
+  $('tb-cmp').textContent=d.tyre_compound||'';
+
+  $('spd').textContent=d.speed_mph!=null?d.speed_mph.toFixed(0):'—';
+
+  const g=d.gear;
+  const ge=$('gear');
+  ge.textContent=g==null?'—':g===0?'N':g===-1?'R':g;
+  ge.className='gear-num'+(g===0?' N':g===-1?' R':'');
+
+  const rpm=d.rpm||0;
+  $('rpm').textContent=rpm?Math.round(rpm).toLocaleString():'—';
+  if(d.engine_max_rpm&&d.engine_max_rpm>2000)_maxRpm=d.engine_max_rpm;
+  const pct=Math.min(100,rpm/_maxRpm*100);
+  const rev=$('rev');
+  rev.style.width=pct+'%';
+  const cls=pct>=88?'shift':pct>=75?'hi':pct>=55?'mid':'lo';
+  rev.className='rev-fill '+cls;
+  $('rpm-sub').textContent=pct>1?Math.round(pct)+'%':'';
+
+  const thr=d.throttle_pct||0,brk=d.brake_pct||0,clt=d.clutch_pct||0;
+  $('thr-b').style.width=thr+'%';$('thr-v').textContent=thr.toFixed(0)+'%';
+  $('brk-b').style.width=brk+'%';$('brk-v').textContent=brk.toFixed(0)+'%';
+  $('clt-b').style.width=clt+'%';$('clt-v').textContent=clt.toFixed(0)+'%';
+
+  $('glat').textContent=d.g_lat!=null?d.g_lat.toFixed(2)+'g':'—';
+  $('glon').textContent=d.g_lon!=null?d.g_lon.toFixed(2)+'g':'—';
+  $('srl').textContent=d.slip_rl!=null?d.slip_rl.toFixed(3):'—';
+  $('srr').textContent=d.slip_rr!=null?d.slip_rr.toFixed(3):'—';
+  $('fuel').textContent=d.fuel_remaining_laps!=null?d.fuel_remaining_laps.toFixed(1):'—';
+  $('tyre').textContent=d.tyre_compound||'—';
+
+  const udp=d.udp_received||{},rej=d.udp_rejected||{},rsz=d.last_rejected_size||{};
+  $('udp-strip').innerHTML=['forza_motorsport','acc','f1'].map(g=>{
+    const n=udp[g]||0,r=rej[g]||0,sz=rsz[g];
+    const c=n>0?'#22c55e22':r>0?'#ef444433':'#111';
+    return `<span style="color:${c}">${g.replace('_motorsport','').replace('_',' ')}: ${n}ok${r?' '+r+'rej':''}${sz?' ('+sz+'B)':''}</span>`;
+  }).join('<span style="color:#0a0a0a"> · </span>');
 };
-es.onerror = () => { $('dot').className = 'status-dot idle'; };
-async function resetCounters() {
-  await fetch('/reset', { method: 'POST' });
+es.onerror=()=>{$('dot').className='dot idle';};
+
+function fmt(s){const m=Math.floor(s/60);return m+':'+(s%60).toFixed(3).padStart(6,'0');}
+async function resetCounters(){await fetch('/reset',{method:'POST'});}
+
+function toggleDebug(){
+  _dbgOpen=!_dbgOpen;
+  $('dbg').style.display=_dbgOpen?'flex':'none';
+  $('dbg-btn').className='bot-btn'+(_dbgOpen?' on':'');
+  if(_dbgOpen&&!_dbgEs)startDbg();
 }
-
-// ── debug console ─────────────────────────────────────────────────────────────
-let _dbgEs = null, _dbgOpen = false;
-const _dbgLines = [];
-
-function toggleDebug() {
-  _dbgOpen = !_dbgOpen;
-  const panel = document.getElementById('debug-panel');
-  const btn   = document.getElementById('dbg-btn');
-  panel.style.display = _dbgOpen ? 'block' : 'none';
-  btn.style.color = _dbgOpen ? '#22c55e' : '#555';
-  btn.style.borderColor = _dbgOpen ? '#22c55e44' : '#2a2a3a';
-  if (_dbgOpen && !_dbgEs) startDebugStream();
+function startDbg(){
+  _dbgEs=new EventSource('/debug-stream');
+  _dbgEs.onmessage=e=>addDbg(JSON.parse(e.data));
+  _dbgEs.onerror=()=>{_dbgEs=null;if(_dbgOpen)setTimeout(startDbg,2000);};
 }
-
-function startDebugStream() {
-  _dbgEs = new EventSource('/debug-stream');
-  _dbgEs.onmessage = e => appendDebug(JSON.parse(e.data));
-  _dbgEs.onerror = () => {
-    _dbgEs = null;
-    if (_dbgOpen) setTimeout(startDebugStream, 2000);
-  };
+function lnColor(l){
+  if(l.includes('[ERROR]'))return'#ef4444';
+  if(l.includes('[WARNING]')||l.includes('[REJECTED]'))return'#f59e0b';
+  if(l.includes('[UDP OK]'))return'#22c55e33';
+  return'#1e1e2a';
 }
-
-function lineColor(line) {
-  if (line.includes('[ERROR]'))    return '#ef4444';
-  if (line.includes('[WARNING]'))  return '#f59e0b';
-  if (line.includes('[REJECTED]')) return '#f59e0b';
-  if (line.includes('[UDP OK]'))   return '#22c55e55';
-  if (line.includes('[INFO]'))     return '#3a3a4a';
-  return '#3a3a4a';
-}
-
-function lineVisible(line) {
-  const f = document.getElementById('dbg-filter').value;
-  if (f === 'warn') return line.includes('[ERROR]') || line.includes('[WARNING]') || line.includes('[REJECTED]');
-  if (f === 'udp')  return line.includes('[UDP OK]') || line.includes('[REJECTED]');
+function lnVis(l){
+  const f=$('dbg-f').value;
+  if(f==='warn')return l.includes('[ERROR]')||l.includes('[WARNING]')||l.includes('[REJECTED]');
+  if(f==='udp')return l.includes('[UDP OK]')||l.includes('[REJECTED]');
   return true;
 }
-
-function appendDebug(line) {
-  _dbgLines.push(line);
-  if (_dbgLines.length > 2000) _dbgLines.shift();
-  if (!lineVisible(line)) return;
-  const el = document.getElementById('debug-log');
-  const div = document.createElement('div');
-  div.style.color = lineColor(line);
-  div.style.borderBottom = '1px solid #0a0a10';
-  div.style.padding = '1px 0';
-  div.dataset.line = line;
-  div.textContent = line;
-  el.appendChild(div);
-  while (el.children.length > 1000) el.removeChild(el.firstChild);
-  if (document.getElementById('dbg-autoscroll').checked) el.scrollTop = el.scrollHeight;
+function addDbg(line){
+  _dbgLines.push(line);if(_dbgLines.length>2000)_dbgLines.shift();
+  if(!lnVis(line))return;
+  const el=$('dbg-log');
+  const d=document.createElement('div');
+  d.style.cssText='color:'+lnColor(line)+';border-bottom:1px solid #08080f;padding:1px 0';
+  d.textContent=line;el.appendChild(d);
+  while(el.children.length>1000)el.removeChild(el.firstChild);
+  if($('dbg-as').checked)el.scrollTop=el.scrollHeight;
 }
-
-function applyFilter() {
-  const el = document.getElementById('debug-log');
-  el.innerHTML = '';
-  _dbgLines.filter(lineVisible).slice(-500).forEach(line => {
-    const div = document.createElement('div');
-    div.style.color = lineColor(line);
-    div.style.borderBottom = '1px solid #0a0a10';
-    div.style.padding = '1px 0';
-    div.textContent = line;
-    el.appendChild(div);
+function applyFilter(){
+  const el=$('dbg-log');el.innerHTML='';
+  _dbgLines.filter(lnVis).slice(-500).forEach(l=>{
+    const d=document.createElement('div');
+    d.style.cssText='color:'+lnColor(l)+';border-bottom:1px solid #08080f;padding:1px 0';
+    d.textContent=l;el.appendChild(d);
   });
-  el.scrollTop = el.scrollHeight;
+  el.scrollTop=el.scrollHeight;
 }
-
-function clearDebug() {
-  _dbgLines.length = 0;
-  document.getElementById('debug-log').innerHTML = '';
-}
+function clearDebug(){_dbgLines.length=0;$('dbg-log').innerHTML='';}
 </script>
 </body>
 </html>
