@@ -595,6 +595,8 @@ class Session:
         # Motion cache (F1 motion packets arrive separately from telemetry)
         self._motion_cache: dict = {}
 
+        self.race_type = None  # set post-session via /sessions/update
+
         self.last_activity = time.time()  # updated only when driver input is detected
 
         raw_path = storage_path() / "raw" / f"{self.session_id}.bin"
@@ -712,6 +714,7 @@ class Session:
             "track":            self.track,
             "car":              self.car,
             "session_type":     self.session_type,
+            "race_type":        self.race_type,
             "started_at":       self.started_at.isoformat(),
             "ended_at":         datetime.now().isoformat(),
             "packet_count":     self.packet_count,
@@ -1222,6 +1225,39 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 #dbg .dh{flex:none;display:flex;justify-content:space-between;align-items:center;padding:5px 12px;border-bottom:1px solid #0d0d18}
 #dbg .dh span{font-size:.6rem;color:#444;text-transform:uppercase;letter-spacing:2px}
 #dbg-log{flex:1;overflow-y:auto;font-size:.66rem;padding:6px 12px;line-height:1.6}
+
+/* finish overlay */
+#fo{position:fixed;inset:0;background:#000e;z-index:100;display:none;align-items:center;justify-content:center}
+#fo.open{display:flex}
+.fo-box{background:#080810;border:1px solid #1e1e2e;border-radius:8px;width:min(520px,95vw);max-height:90vh;display:flex;flex-direction:column;overflow:hidden}
+.fo-head{padding:20px 24px 14px;border-bottom:1px solid #111}
+.fo-title{font-size:1.4rem;font-weight:900;color:#fff;letter-spacing:-1px;margin-bottom:4px}
+.fo-sub{font-size:.85rem;color:#666}
+.fo-body{flex:1;overflow-y:auto;padding:20px 24px}
+.fo-section{margin-bottom:20px}
+.fo-lbl{font-size:.78rem;color:#888;text-transform:uppercase;letter-spacing:2px;margin-bottom:10px}
+.type-chips{display:flex;flex-wrap:wrap;gap:8px}
+.type-chip{background:#111;border:1px solid #222;color:#666;font-family:inherit;font-size:.82rem;padding:7px 14px;border-radius:20px;cursor:pointer;letter-spacing:.5px;transition:all .1s}
+.type-chip:hover{border-color:#444;color:#ccc}
+.type-chip.sel{background:#22c55e18;border-color:#22c55e88;color:#22c55e}
+.fo-lap-list{display:flex;flex-direction:column;gap:4px}
+.fo-lap{display:flex;align-items:center;gap:12px;padding:8px 10px;border-radius:4px;background:#0a0a12;border:1px solid #111}
+.fo-lap.partial{border-color:#f59e0b44;background:#1a130a}
+.fo-lap-num{font-size:.72rem;color:#555;width:32px}
+.fo-lap-time{font-size:1rem;font-weight:900;color:#e0e0e0;flex:1}
+.fo-lap-time.best{color:#22c55e}
+.fo-lap-badge{font-size:.65rem;color:#f59e0b;letter-spacing:1px;background:#f59e0b18;border:1px solid #f59e0b44;padding:2px 7px;border-radius:10px}
+.fo-lap-del{background:none;border:1px solid #ef444444;color:#ef4444;font-family:inherit;font-size:.72rem;padding:3px 9px;border-radius:3px;cursor:pointer}
+.fo-lap-del:hover{background:#ef444422}
+.fo-lap-del.undone{border-color:#22c55e44;color:#22c55e}
+.fo-foot{padding:14px 24px;border-top:1px solid #111;display:flex;gap:10px;justify-content:flex-end}
+.fo-save{background:#22c55e;color:#000;border:none;font-family:inherit;font-size:.9rem;font-weight:bold;padding:10px 28px;border-radius:4px;cursor:pointer;letter-spacing:1px}
+.fo-save:hover{background:#16a34a}
+.fo-skip{background:none;border:1px solid #222;color:#555;font-family:inherit;font-size:.85rem;padding:9px 20px;border-radius:4px;cursor:pointer}
+.fo-skip:hover{border-color:#444;color:#aaa}
+/* finish race button */
+.bot-finish{background:#22c55e;color:#000;border:none;font-family:inherit;font-size:.72rem;font-weight:bold;padding:4px 14px;border-radius:2px;cursor:pointer;letter-spacing:1px;text-transform:uppercase;display:none}
+.bot-finish:hover{background:#16a34a}
 </style>
 </head>
 <body>
@@ -1344,6 +1380,7 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 
 <div class="bot">
   <div class="udp-strip" id="udp-strip"></div>
+  <button class="bot-finish" id="btn-finish" onclick="openFinish()">Finish Race</button>
   <button class="bot-btn" onclick="resetCounters()">Reset</button>
   <button class="bot-btn" id="dbg-btn" onclick="toggleDebug()">Debug</button>
 </div>
@@ -1362,10 +1399,41 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
   <div id="dbg-log"></div>
 </div>
 
+<div id="fo">
+  <div class="fo-box">
+    <div class="fo-head">
+      <div class="fo-title" id="fo-title">Session Complete</div>
+      <div class="fo-sub" id="fo-sub">—</div>
+    </div>
+    <div class="fo-body">
+      <div class="fo-section">
+        <div class="fo-lbl">Session Type</div>
+        <div class="type-chips">
+          <button class="type-chip" data-val="practice" onclick="selType(this)">Practice</button>
+          <button class="type-chip" data-val="time_trial" onclick="selType(this)">Time Trial</button>
+          <button class="type-chip" data-val="qualifying" onclick="selType(this)">Qualifying</button>
+          <button class="type-chip" data-val="race_ai" onclick="selType(this)">Race vs AI</button>
+          <button class="type-chip" data-val="race_online" onclick="selType(this)">Online Race</button>
+          <button class="type-chip" data-val="hot_lap" onclick="selType(this)">Hot Lap</button>
+        </div>
+      </div>
+      <div class="fo-section">
+        <div class="fo-lbl">Laps</div>
+        <div class="fo-lap-list" id="fo-laps"></div>
+      </div>
+    </div>
+    <div class="fo-foot">
+      <button class="fo-skip" onclick="closeFinish()">Skip</button>
+      <button class="fo-save" onclick="saveFinish()">Save</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const $=id=>document.getElementById(id);
 const es=new EventSource('/stream');
 let _maxRpm=8500,_dbgEs=null,_dbgOpen=false,_bestLap=null;
+let state_sid=null;
 const _dbgLines=[];
 
 function fmt(s){
@@ -1414,6 +1482,10 @@ es.onmessage=e=>{
   $('tb-track').textContent=d.track&&d.track!=='unknown'?d.track:'—';
   $('tb-drs').style.display=d.drs?'inline':'none';
   $('tb-cmp').textContent=d.tyre_compound||'';
+
+  // track session id and show/hide finish button
+  if(d.session_id) state_sid = d.session_id;
+  $('btn-finish').style.display = (recv||ended) ? 'inline-block' : 'none';
 
   // gear
   const g=d.gear;
@@ -1527,6 +1599,91 @@ function applyFilter(){
   el.scrollTop=el.scrollHeight;
 }
 function clearDebug(){_dbgLines.length=0;$('dbg-log').innerHTML='';}
+
+// ── Finish Race overlay ───────────────────────────────────────────────────────
+let _foSid=null, _foRaceType=null, _foDropLast=false, _foLaps=[], _foClosed=false;
+
+function selType(el){
+  document.querySelectorAll('.type-chip').forEach(c=>c.classList.remove('sel'));
+  el.classList.add('sel');
+  _foRaceType=el.dataset.val;
+}
+
+async function openFinish(){
+  // Close session immediately if still active
+  const sid = state_sid || null;
+  await fetch('/finish',{method:'POST'});
+  // Wait a tick for state to update
+  await new Promise(r=>setTimeout(r,400));
+  // Find the session we just closed — get from /status
+  const st = await fetch('/status').then(r=>r.json());
+  _foSid = sid || st.session_id;
+  _foRaceType = null;
+  _foDropLast = false;
+  _foClosed = false;
+
+  if(!_foSid){ alert('No active session to finish.'); return; }
+
+  // Load laps
+  try {
+    const sess = await fetch('/sessions/data').then(r=>r.json());
+    const cur = sess.find(s=>s.session_id===_foSid) || sess[sess.length-1];
+    if(!cur){ closeFinish(); return; }
+    _foSid = cur.session_id;
+    _foLaps = cur.laps || [];
+
+    $('fo-title').textContent = cur.track&&cur.track!=='unknown' ? cur.track : 'Session Complete';
+    $('fo-sub').textContent = (cur.game||'').replace(/_/g,' ') + (cur.started_at?' · '+new Date(cur.started_at).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'');
+
+    // Pre-select race_type if already set
+    if(cur.race_type){
+      const chip = document.querySelector(`.type-chip[data-val="${cur.race_type}"]`);
+      if(chip){ selType(chip); }
+    }
+    renderFoLaps();
+  } catch(e){ console.error(e); return; }
+
+  $('fo').classList.add('open');
+}
+
+function renderFoLaps(){
+  const best = _foClosed ? null : Math.min(..._foLaps.filter(l=>l.lap_time_s).map(l=>l.lap_time_s));
+  const lastIdx = _foLaps.length - 1;
+  $('fo-laps').innerHTML = _foLaps.map((lap,i)=>{
+    const t = lap.lap_time_s;
+    const isLast = i===lastIdx;
+    const isBest = t && t===best;
+    const isPartial = isLast && (!t || _foDropLast);
+    const timeStr = t ? fmt(t) : 'partial';
+    const delBtn = isLast
+      ? `<button class="fo-lap-del${_foDropLast?' undone':''}" onclick="toggleDropLast()">${_foDropLast?'Restore':'Delete'}</button>`
+      : '';
+    return `<div class="fo-lap${isPartial?' partial':''}">
+      <span class="fo-lap-num">L${lap.lap_number}</span>
+      <span class="fo-lap-time${isBest&&!_foDropLast?' best':''}">${timeStr}</span>
+      ${isPartial&&!_foDropLast?'<span class="fo-lap-badge">PARTIAL</span>':''}
+      ${delBtn}
+    </div>`;
+  }).join('');
+}
+
+function toggleDropLast(){
+  _foDropLast = !_foDropLast;
+  renderFoLaps();
+}
+
+async function saveFinish(){
+  if(!_foSid) return;
+  const body = { id: _foSid };
+  if(_foRaceType) body.race_type = _foRaceType;
+  if(_foDropLast) body.drop_last_lap = true;
+  await fetch('/sessions/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  closeFinish();
+}
+
+function closeFinish(){
+  $('fo').classList.remove('open');
+}
 </script>
 </body>
 </html>
@@ -2004,6 +2161,7 @@ a{color:#aaa;text-decoration:none}a:hover{color:#fff}
 .s-track{font-size:.85rem;color:#ddd;font-weight:bold;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .s-meta{display:flex;gap:10px;font-size:.75rem;color:#777}
 .s-best{color:#22c55e99}
+.s-type{display:inline-block;font-size:.65rem;background:#22c55e18;border:1px solid #22c55e44;color:#22c55e;padding:1px 7px;border-radius:10px;margin-left:8px;letter-spacing:.5px;vertical-align:middle}
 .no-s{padding:24px;font-size:.8rem;color:#555;text-align:center}
 
 /* main area */
@@ -2079,6 +2237,8 @@ canvas{display:block;cursor:crosshair}
 .analysis-meta.cached{color:#22c55e66}
 .analysis-body{font-size:.85rem;line-height:1.75;color:#ccc;white-space:pre-wrap;border-top:1px solid #1a1a28;padding-top:18px;display:none}
 .analysis-err{color:#ef4444;font-size:.8rem;margin-top:12px}
+.type-sel{background:#111;border:1px solid #222;color:#888;font-family:inherit;font-size:.78rem;padding:5px 10px;border-radius:4px;outline:none;cursor:pointer}
+.type-sel:hover{border-color:#444}
 </style>
 </head>
 <body>
@@ -2183,8 +2343,10 @@ function renderList() {
     const best=s.best_lap_time_s?fmtLap(s.best_lap_time_s):'--:--.---';
     const laps=(s.laps||[]).length;
     const act=_cur&&_cur.session_id===s.session_id?'active':'';
+    const TYPE_LABELS = {practice:'Practice',time_trial:'Time Trial',qualifying:'Qualifying',race_ai:'Race vs AI',race_online:'Online Race',hot_lap:'Hot Lap'};
+    const typeBadge = s.race_type ? `<span class="s-type">${TYPE_LABELS[s.race_type]||s.race_type}</span>` : '';
     return `<div class="s-item ${act}" onclick="pick('${s.session_id}')">
-      <div class="s-date">${dt}</div>
+      <div class="s-date">${dt}${typeBadge}</div>
       <div class="s-track">${s.track&&s.track!=='unknown'?s.track:'Unknown Track'}</div>
       <div class="s-meta"><span>${laps} lap${laps!==1?'s':''}</span><span class="s-best">${best}</span><span>${s.packet_count||0} pkt</span></div>
     </div>`;
@@ -2277,15 +2439,26 @@ async function runAnalysis(force) {
   if(_cur) loadAnalysis(_cur.session_id, !!force);
 }
 
+const TYPE_LABELS = {practice:'Practice',time_trial:'Time Trial',qualifying:'Qualifying',race_ai:'Race vs AI',race_online:'Online Race',hot_lap:'Hot Lap'};
 function renderHeader() {
   const s=_cur;
   const best=s.best_lap_time_s?fmtLap(s.best_lap_time_s):'—';
   const dt=new Date(s.started_at).toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+  const typeOpts = ['','practice','time_trial','qualifying','race_ai','race_online','hot_lap']
+    .map(v=>v?`<option value="${v}"${s.race_type===v?' selected':''}>${TYPE_LABELS[v]}</option>`
+             :`<option value=""${!s.race_type?' selected':''}>— Type —</option>`).join('');
   document.getElementById('shdr').innerHTML=`
     <div class="hdr-title">${s.track&&s.track!=='unknown'?s.track:'Unknown Track'}&nbsp;&middot;&nbsp;${(s.game||'').replace(/_/g,' ')}</div>
     <div class="hdr-stat"><div class="v">${best}</div><div class="l">Best Lap</div></div>
     <div class="hdr-stat"><div class="v">${(_laps||[]).length}</div><div class="l">Laps</div></div>
-    <div class="hdr-stat" style="font-size:.62rem;color:#333">${dt}</div>`;
+    <select class="type-sel" onchange="setType(this.value)">${typeOpts}</select>`;
+}
+async function setType(val){
+  if(!_cur) return;
+  _cur.race_type = val||null;
+  await fetch('/sessions/update',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id:_cur.session_id,race_type:val||null})});
+  renderList();
 }
 
 function renderResults() {
@@ -2830,6 +3003,46 @@ async def handle_status(reader, writer):
             except OSError:
                 writer.write(_http_response("404 Not Found", "application/json", b"[]"))
 
+        elif path == "/sessions/update" and method == "POST":
+            try:
+                body_data = json.loads(raw_body)
+            except (json.JSONDecodeError, ValueError) as exc:
+                writer.write(_http_response("400 Bad Request", "application/json",
+                                            json.dumps({"error": str(exc)}).encode()))
+            else:
+                sid = body_data.get("id", "")
+                sessions_dir = storage_path() / "sessions"
+                session_file = sessions_dir / f"{sid}.json"
+                laps_file    = sessions_dir / f"{sid}_laps.json"
+                try:
+                    session_data = json.loads(session_file.read_text())
+                except OSError:
+                    writer.write(_http_response("404 Not Found", "application/json",
+                                                json.dumps({"error": "Session not found"}).encode()))
+                else:
+                    # Update race_type
+                    if "race_type" in body_data:
+                        session_data["race_type"] = body_data["race_type"]
+
+                    # Drop last lap
+                    if body_data.get("drop_last_lap") and session_data.get("laps"):
+                        session_data["laps"] = session_data["laps"][:-1]
+                        # Recalculate best
+                        valid = [l["lap_time_s"] for l in session_data["laps"] if l.get("lap_time_s")]
+                        session_data["best_lap_time_s"] = round(min(valid), 3) if valid else None
+                        # Drop from laps detail file too
+                        try:
+                            laps_detail = json.loads(laps_file.read_text())
+                            if laps_detail:
+                                laps_detail = laps_detail[:-1]
+                                laps_file.write_text(json.dumps(laps_detail, indent=2))
+                        except OSError:
+                            pass
+
+                    session_file.write_text(json.dumps(session_data, indent=2))
+                    writer.write(_http_response("200 OK", "application/json",
+                                                json.dumps({"ok": True, "session": session_data}).encode()))
+
         elif path == "/analyze":
             qs = {k: urllib.parse.unquote_plus(v)
                   for pair in query_string.split("&") if "=" in pair
@@ -2896,6 +3109,19 @@ async def handle_status(reader, writer):
                 state["udp_rejected"][game] = 0
                 state["last_rejected_size"][game] = None
             writer.write(_http_response("200 OK", "application/json", b'{"ok":true}'))
+
+        elif path == "/finish" and method == "POST":
+            closed = []
+            for game, session in list(active_sessions.items()):
+                session.close()
+                active_sessions.pop(game)
+                closed.append(session.session_id)
+            if closed:
+                state["status"] = "race_ended"
+                state["game"] = None
+                asyncio.create_task(_clear_race_ended())
+            writer.write(_http_response("200 OK", "application/json",
+                                        json.dumps({"ok": True, "closed": closed}).encode()))
 
         elif path == "/admin" and method == "GET":
             writer.write(_http_response("200 OK", "text/html", ADMIN_HTML.encode()))
