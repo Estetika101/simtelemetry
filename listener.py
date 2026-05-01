@@ -983,17 +983,37 @@ def _http_response(status: str, content_type: str, body: bytes, extra_headers: s
 
 async def handle_status(reader, writer):
     try:
-        raw = await asyncio.wait_for(reader.read(8192), timeout=5)
-        request_str = raw.decode("utf-8", errors="ignore")
-        lines = request_str.split("\r\n")
-        request_line = lines[0] if lines else ""
-        parts = request_line.split(" ")
+        # Read until the end of HTTP headers
+        header_buf = b""
+        while b"\r\n\r\n" not in header_buf:
+            chunk = await asyncio.wait_for(reader.read(4096), timeout=5)
+            if not chunk:
+                break
+            header_buf += chunk
+
+        header_bytes, _, body_so_far = header_buf.partition(b"\r\n\r\n")
+        header_str = header_bytes.decode("utf-8", errors="ignore")
+        header_lines = header_str.split("\r\n")
+        request_line = header_lines[0] if header_lines else ""
+        parts  = request_line.split(" ")
         method = parts[0] if parts else "GET"
         path   = parts[1].split("?")[0] if len(parts) > 1 else "/"
 
-        # Split headers from body for POST
-        header_end = request_str.find("\r\n\r\n")
-        raw_body = request_str[header_end + 4:] if header_end != -1 else ""
+        # Parse Content-Length so we read the full POST body
+        content_length = 0
+        for line in header_lines[1:]:
+            if line.lower().startswith("content-length:"):
+                content_length = int(line.split(":", 1)[1].strip())
+                break
+
+        body_buf = body_so_far
+        while len(body_buf) < content_length:
+            chunk = await asyncio.wait_for(reader.read(content_length - len(body_buf)), timeout=5)
+            if not chunk:
+                break
+            body_buf += chunk
+
+        raw_body = body_buf.decode("utf-8", errors="ignore")
 
         if path in ("/", "/dashboard"):
             writer.write(_http_response("200 OK", "text/html", DASHBOARD_HTML.encode()))
