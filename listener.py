@@ -9,35 +9,69 @@ Exposes local web status server at http://pi.local:8000
 import asyncio
 import json
 import logging
+import os
+import shutil
 import struct
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-# ─── Configuration ────────────────────────────────────────────────────────────
+# ─── Config file ──────────────────────────────────────────────────────────────
 
-STORAGE_PATH = Path("/mnt/usb/simtelemetry")  # Change to your USB mount point
+CONFIG_FILE = Path(__file__).parent / "simtelemetry.config.json"
 
-PORTS = {
-    "forza_motorsport": 5300,
-    "acc":              9996,
-    "f1":               20777,
+DEFAULTS: dict = {
+    "storage_path":     "/mnt/usb/simtelemetry",
+    "session_timeout_s": 10,
+    "status_port":      8000,
+    "ports": {
+        "forza_motorsport": 5300,
+        "acc":              9996,
+        "f1":               20777,
+    },
 }
 
-SESSION_TIMEOUT_S = 10      # Seconds of silence before session is closed
-STATUS_PORT       = 8000    # Local web server port
+def load_config() -> dict:
+    if CONFIG_FILE.exists():
+        try:
+            saved = json.loads(CONFIG_FILE.read_text())
+            merged = {**DEFAULTS, **saved}
+            merged["ports"] = {**DEFAULTS["ports"], **saved.get("ports", {})}
+            return merged
+        except Exception:
+            pass
+    return {**DEFAULTS, "ports": {**DEFAULTS["ports"]}}
+
+def save_config(cfg: dict):
+    CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+
+config = load_config()
+
+# Convenience accessors — always read through config so runtime updates take effect
+def storage_path() -> Path:
+    return Path(config["storage_path"])
+
+PORTS             = config["ports"]          # used at bind time; port changes need restart
+SESSION_TIMEOUT_S = config["session_timeout_s"]
+STATUS_PORT       = config["status_port"]
 LOG_LEVEL         = logging.INFO
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
+# Bootstrap log dir before logger is configured; use default path if storage
+# doesn't exist yet so the process doesn't crash on first run.
+_log_dir = Path(config["storage_path"]) / "logs"
+try:
+    _log_dir.mkdir(parents=True, exist_ok=True)
+    _log_handler = logging.FileHandler(_log_dir / "listener.log")
+except OSError:
+    _log_handler = logging.StreamHandler()  # fallback if path isn't mounted yet
+
 logging.basicConfig(
     level=LOG_LEVEL,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.FileHandler(STORAGE_PATH / "logs" / "listener.log"),
-        logging.StreamHandler(),
-    ],
+    handlers=[_log_handler, logging.StreamHandler()],
 )
 log = logging.getLogger("simtelemetry")
 
@@ -45,7 +79,19 @@ log = logging.getLogger("simtelemetry")
 
 def ensure_storage():
     for subdir in ["raw", "sessions", "logs"]:
-        (STORAGE_PATH / subdir).mkdir(parents=True, exist_ok=True)
+        (storage_path() / subdir).mkdir(parents=True, exist_ok=True)
+
+def disk_info() -> dict:
+    """Return free/total bytes for the storage path volume."""
+    try:
+        usage = shutil.disk_usage(storage_path())
+        return {
+            "total_gb": round(usage.total / 1e9, 1),
+            "used_gb":  round(usage.used  / 1e9, 1),
+            "free_gb":  round(usage.free  / 1e9, 1),
+        }
+    except OSError:
+        return {"total_gb": None, "used_gb": None, "free_gb": None}
 
 # ─── Forza Motorsport Parser ──────────────────────────────────────────────────
 # FM2023 Data Out "Car Dash" packet: 311 bytes
@@ -440,7 +486,7 @@ class Session:
         # Motion cache (F1 motion packets arrive separately from telemetry)
         self._motion_cache: dict = {}
 
-        raw_path = STORAGE_PATH / "raw" / f"{self.session_id}.bin"
+        raw_path = storage_path() / "raw" / f"{self.session_id}.bin"
         self.raw_file = open(raw_path, "wb")
         log.info(f"Session started: {self.session_id}")
 
@@ -541,12 +587,12 @@ class Session:
         }
 
         # Write summary JSON
-        out_path = STORAGE_PATH / "sessions" / f"{self.session_id}.json"
+        out_path = storage_path() / "sessions" / f"{self.session_id}.json"
         with open(out_path, "w") as f:
             json.dump(session_data, f, indent=2)
 
         # Write full lap samples as separate file
-        samples_path = STORAGE_PATH / "sessions" / f"{self.session_id}_laps.json"
+        samples_path = storage_path() / "sessions" / f"{self.session_id}_laps.json"
         with open(samples_path, "w") as f:
             json.dump(
                 [lap.to_dict() for lap in self.completed_laps],
@@ -665,16 +711,17 @@ async def session_watchdog():
 
 # ─── Local Status Server ──────────────────────────────────────────────────────
 
-DASHBOARD_HTML = r"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SimTelemetry</title>
+_PAGE_STYLE = """
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: #0d0d0f; color: #e0e0e0; font-family: 'Courier New', monospace; padding: 16px; }
-  h1 { font-size: 1.1rem; color: #aaa; letter-spacing: 3px; text-transform: uppercase; margin-bottom: 16px; }
+  body { background: #0d0d0f; color: #e0e0e0; font-family: 'Courier New', monospace; padding: 16px; max-width: 860px; }
+  a { color: #888; text-decoration: none; }
+  a:hover { color: #ccc; }
+  .topbar { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 16px; }
+  .topbar h1 { font-size: 1.1rem; color: #aaa; letter-spacing: 3px; text-transform: uppercase; }
+  .topbar nav { font-size: 0.75rem; color: #555; }
+  .topbar nav a { margin-left: 16px; }
+  .topbar nav a.active { color: #e0e0e0; border-bottom: 1px solid #e0e0e0; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
   .card { background: #1a1a1f; border: 1px solid #2a2a3a; border-radius: 6px; padding: 12px 16px; }
   .card .label { font-size: 0.65rem; color: #666; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
@@ -700,10 +747,47 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   #drs-badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 0.7rem; font-weight: bold; }
   #drs-badge.on  { background: #22c55e22; color: #22c55e; border: 1px solid #22c55e55; }
   #drs-badge.off { background: #11111a; color: #333; border: 1px solid #222; }
+  /* setup page */
+  .section { margin-bottom: 28px; }
+  .section-title { font-size: 0.65rem; color: #555; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 12px; border-bottom: 1px solid #1e1e28; padding-bottom: 6px; }
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 0.7rem; color: #888; margin-bottom: 5px; }
+  .field input { width: 100%; background: #1a1a1f; border: 1px solid #2a2a3a; color: #e0e0e0;
+    font-family: inherit; font-size: 0.85rem; padding: 8px 10px; border-radius: 4px; outline: none; }
+  .field input:focus { border-color: #4a4a6a; }
+  .field .hint { font-size: 0.65rem; color: #444; margin-top: 4px; }
+  .disk-bar-bg { background: #1a1a1f; border-radius: 3px; height: 8px; overflow: hidden; margin-top: 6px; }
+  .disk-bar-fill { height: 100%; border-radius: 3px; background: #4a6aef; transition: width 0.3s; }
+  .btn { background: #22c55e; color: #000; border: none; font-family: inherit; font-size: 0.8rem;
+    font-weight: bold; padding: 9px 22px; border-radius: 4px; cursor: pointer; letter-spacing: 1px; }
+  .btn:hover { background: #16a34a; }
+  .btn:disabled { background: #2a2a3a; color: #555; cursor: default; }
+  .toast { display: none; margin-top: 14px; padding: 10px 14px; border-radius: 4px; font-size: 0.8rem; }
+  .toast.ok  { background: #22c55e22; color: #22c55e; border: 1px solid #22c55e44; display: block; }
+  .toast.err { background: #ef444422; color: #ef4444; border: 1px solid #ef444444; display: block; }
+  .ports-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  .disk-info { font-size: 0.7rem; color: #555; margin-top: 8px; }
+  .disk-info span { color: #888; }
 </style>
+"""
+
+DASHBOARD_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SimTelemetry</title>
+""" + _PAGE_STYLE + r"""
 </head>
 <body>
-<h1>SimTelemetry <span class="status-dot idle" id="dot"></span><span id="status-text">idle</span></h1>
+<div class="topbar">
+  <h1>SimTelemetry <span class="status-dot idle" id="dot"></span><span id="status-text">idle</span></h1>
+  <nav>
+    <a href="/" class="active">Live</a>
+    <a href="/sessions">Sessions</a>
+    <a href="/setup">Setup</a>
+  </nav>
+</div>
 <div class="meta">
   <span id="game-meta">—</span>
   <span id="track-meta">—</span>
@@ -749,23 +833,19 @@ es.onmessage = e => {
   $('rpm').textContent = d.rpm != null ? Math.round(d.rpm) : '—';
   $('glat').textContent = d.g_lat != null ? d.g_lat.toFixed(2) : '—';
   $('glon').textContent = d.g_lon != null ? d.g_lon.toFixed(2) : '—';
-  const thr = d.throttle_pct || 0;
-  const brk = d.brake_pct || 0;
-  const clt = d.clutch_pct || 0;
+  const thr = d.throttle_pct || 0, brk = d.brake_pct || 0, clt = d.clutch_pct || 0;
   $('thr-bar').style.width = thr + '%'; $('thr-pct').textContent = thr.toFixed(0) + '%';
   $('brk-bar').style.width = brk + '%'; $('brk-pct').textContent = brk.toFixed(0) + '%';
   $('clt-bar').style.width = clt + '%'; $('clt-pct').textContent = clt.toFixed(0) + '%';
   $('slip-rl').textContent = d.slip_rl != null ? d.slip_rl.toFixed(3) : '—';
   $('slip-rr').textContent = d.slip_rr != null ? d.slip_rr.toFixed(3) : '—';
-  $('slip-fl').textContent = '—';
-  $('slip-fr').textContent = '—';
+  $('slip-fl').textContent = '—'; $('slip-fr').textContent = '—';
   $('game-meta').textContent = d.game || '—';
   $('track-meta').textContent = d.track || '—';
   $('lap-meta').textContent = 'lap ' + (d.lap != null ? d.lap : '—');
   $('best-meta').textContent = d.best_lap_time_s ? 'best ' + d.best_lap_time_s.toFixed(3) + 's' : 'best —';
   $('compound-meta').textContent = d.tyre_compound || '';
-  const drs = $('drs-badge');
-  drs.className = d.drs ? 'on' : 'off';
+  $('drs-badge').className = d.drs ? 'on' : 'off';
 };
 es.onerror = () => { $('dot').className = 'status-dot idle'; };
 </script>
@@ -773,50 +853,202 @@ es.onerror = () => { $('dot').className = 'status-dot idle'; };
 </html>
 """
 
+SETUP_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SimTelemetry · Setup</title>
+""" + _PAGE_STYLE + r"""
+</head>
+<body>
+<div class="topbar">
+  <h1>SimTelemetry</h1>
+  <nav>
+    <a href="/">Live</a>
+    <a href="/sessions">Sessions</a>
+    <a href="/setup" class="active">Setup</a>
+  </nav>
+</div>
+
+<div class="section">
+  <div class="section-title">Storage</div>
+  <div class="field">
+    <label>Storage path — where raw archives and session JSON files are saved</label>
+    <input type="text" id="storage_path" placeholder="/mnt/usb/simtelemetry">
+    <div class="hint">USB mount point on Pi; any writable directory on Mac/Windows.</div>
+  </div>
+  <div id="disk-info" class="disk-info"></div>
+</div>
+
+<div class="section">
+  <div class="section-title">Session</div>
+  <div class="field">
+    <label>Session timeout (seconds) — silence before a session is closed</label>
+    <input type="number" id="session_timeout_s" min="2" max="120" step="1">
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">UDP Ports <span style="color:#444;font-size:0.6rem;margin-left:8px">restart required for port changes</span></div>
+  <div class="ports-grid">
+    <div class="field">
+      <label>Forza Motorsport</label>
+      <input type="number" id="port_forza" min="1024" max="65535">
+    </div>
+    <div class="field">
+      <label>ACC</label>
+      <input type="number" id="port_acc" min="1024" max="65535">
+    </div>
+    <div class="field">
+      <label>F1 (Codemasters)</label>
+      <input type="number" id="port_f1" min="1024" max="65535">
+    </div>
+  </div>
+</div>
+
+<button class="btn" id="save-btn" onclick="save()">Save</button>
+<div class="toast" id="toast"></div>
+
+<script>
+async function load() {
+  const r = await fetch('/config');
+  const d = await r.json();
+  document.getElementById('storage_path').value     = d.storage_path || '';
+  document.getElementById('session_timeout_s').value = d.session_timeout_s || 10;
+  document.getElementById('port_forza').value        = (d.ports || {}).forza_motorsport || 5300;
+  document.getElementById('port_acc').value          = (d.ports || {}).acc || 9996;
+  document.getElementById('port_f1').value           = (d.ports || {}).f1 || 20777;
+  renderDisk(d.disk);
+}
+
+function renderDisk(disk) {
+  const el = document.getElementById('disk-info');
+  if (!disk || disk.total_gb == null) { el.textContent = ''; return; }
+  const pct = Math.round(disk.used_gb / disk.total_gb * 100);
+  el.innerHTML = `
+    <div class="disk-bar-bg"><div class="disk-bar-fill" style="width:${pct}%"></div></div>
+    <span>${disk.used_gb} GB used of ${disk.total_gb} GB &mdash; <span>${disk.free_gb} GB free</span></span>`;
+}
+
+async function save() {
+  const btn = document.getElementById('save-btn');
+  const toast = document.getElementById('toast');
+  btn.disabled = true;
+  toast.className = 'toast';
+  const body = {
+    storage_path:      document.getElementById('storage_path').value.trim(),
+    session_timeout_s: parseInt(document.getElementById('session_timeout_s').value, 10),
+    ports: {
+      forza_motorsport: parseInt(document.getElementById('port_forza').value, 10),
+      acc:              parseInt(document.getElementById('port_acc').value, 10),
+      f1:               parseInt(document.getElementById('port_f1').value, 10),
+    }
+  };
+  try {
+    const r = await fetch('/config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (r.ok) {
+      toast.className = 'toast ok';
+      toast.textContent = d.message || 'Saved.';
+      renderDisk(d.disk);
+    } else {
+      toast.className = 'toast err';
+      toast.textContent = d.error || 'Save failed.';
+    }
+  } catch(e) {
+    toast.className = 'toast err';
+    toast.textContent = 'Network error: ' + e.message;
+  }
+  btn.disabled = false;
+}
+
+load();
+</script>
+</body>
+</html>
+"""
+
+
+def _http_response(status: str, content_type: str, body: bytes, extra_headers: str = "") -> bytes:
+    return (
+        f"HTTP/1.1 {status}\r\n"
+        f"Content-Type: {content_type}\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        f"Access-Control-Allow-Origin: *\r\n"
+        f"Connection: close\r\n"
+        f"{extra_headers}\r\n"
+    ).encode() + body
+
 
 async def handle_status(reader, writer):
     try:
-        request = await asyncio.wait_for(reader.read(1024), timeout=5)
-        request_str = request.decode("utf-8", errors="ignore")
-        path = request_str.split(" ")[1].split("?")[0] if " " in request_str else "/"
+        raw = await asyncio.wait_for(reader.read(8192), timeout=5)
+        request_str = raw.decode("utf-8", errors="ignore")
+        lines = request_str.split("\r\n")
+        request_line = lines[0] if lines else ""
+        parts = request_line.split(" ")
+        method = parts[0] if parts else "GET"
+        path   = parts[1].split("?")[0] if len(parts) > 1 else "/"
+
+        # Split headers from body for POST
+        header_end = request_str.find("\r\n\r\n")
+        raw_body = request_str[header_end + 4:] if header_end != -1 else ""
 
         if path in ("/", "/dashboard"):
-            body = DASHBOARD_HTML.encode()
-            writer.write(
-                b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
-                b"Access-Control-Allow-Origin: *\r\n"
-                + f"Content-Length: {len(body)}\r\n".encode()
-                + b"Connection: close\r\n\r\n"
-                + body
-            )
+            writer.write(_http_response("200 OK", "text/html", DASHBOARD_HTML.encode()))
+
+        elif path == "/setup":
+            writer.write(_http_response("200 OK", "text/html", SETUP_HTML.encode()))
+
+        elif path == "/config" and method == "GET":
+            payload = {**config, "disk": disk_info()}
+            writer.write(_http_response("200 OK", "application/json", json.dumps(payload, indent=2).encode()))
+
+        elif path == "/config" and method == "POST":
+            try:
+                incoming = json.loads(raw_body)
+            except (json.JSONDecodeError, ValueError) as exc:
+                err = json.dumps({"error": f"Invalid JSON: {exc}"}).encode()
+                writer.write(_http_response("400 Bad Request", "application/json", err))
+            else:
+                new_path = str(incoming.get("storage_path", config["storage_path"])).strip()
+                # Validate: try to create subdirs
+                try:
+                    test = Path(new_path)
+                    for sub in ["raw", "sessions", "logs"]:
+                        (test / sub).mkdir(parents=True, exist_ok=True)
+                except OSError as exc:
+                    err = json.dumps({"error": f"Cannot create storage path: {exc}"}).encode()
+                    writer.write(_http_response("400 Bad Request", "application/json", err))
+                else:
+                    config["storage_path"]     = new_path
+                    config["session_timeout_s"] = int(incoming.get("session_timeout_s", config["session_timeout_s"]))
+                    if "ports" in incoming:
+                        config["ports"].update({
+                            k: int(v) for k, v in incoming["ports"].items()
+                            if k in config["ports"]
+                        })
+                    save_config(config)
+                    msg = "Saved."
+                    if incoming.get("ports") and incoming["ports"] != PORTS:
+                        msg += " Restart required for port changes to take effect."
+                    result = json.dumps({"ok": True, "message": msg, "disk": disk_info()}).encode()
+                    writer.write(_http_response("200 OK", "application/json", result))
 
         elif path == "/status":
-            body = json.dumps(state, indent=2).encode()
-            writer.write(
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
-                b"Access-Control-Allow-Origin: *\r\n"
-                + f"Content-Length: {len(body)}\r\n".encode()
-                + b"Connection: close\r\n\r\n"
-                + body
-            )
+            writer.write(_http_response("200 OK", "application/json", json.dumps(state, indent=2).encode()))
 
         elif path == "/sessions":
-            sessions_dir = STORAGE_PATH / "sessions"
+            sessions_dir = storage_path() / "sessions"
             files = sorted(sessions_dir.glob("*_[!l]*.json"))  # exclude _laps.json
             result = []
-            for f in files[-50:]:  # last 50 sessions
+            for f in files[-50:]:
                 try:
                     result.append(json.loads(f.read_text()))
                 except Exception:
                     pass
-            body = json.dumps(result, indent=2).encode()
-            writer.write(
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
-                b"Access-Control-Allow-Origin: *\r\n"
-                + f"Content-Length: {len(body)}\r\n".encode()
-                + b"Connection: close\r\n\r\n"
-                + body
-            )
+            writer.write(_http_response("200 OK", "application/json", json.dumps(result, indent=2).encode()))
 
         elif path == "/stream":
             writer.write(
@@ -871,9 +1103,10 @@ async def main():
     asyncio.create_task(session_watchdog())
 
     server = await asyncio.start_server(handle_status, "0.0.0.0", STATUS_PORT)
+    log.info(f"Storage path: {storage_path()}")
     log.info(f"Dashboard at http://pi.local:{STATUS_PORT}/")
+    log.info(f"Setup     at http://pi.local:{STATUS_PORT}/setup")
     log.info(f"Status API at http://pi.local:{STATUS_PORT}/status")
-    log.info(f"Sessions  at http://pi.local:{STATUS_PORT}/sessions")
 
     async with server:
         await server.serve_forever()
