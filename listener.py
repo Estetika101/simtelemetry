@@ -1116,7 +1116,7 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 .dot.receiving{background:#00ff41;box-shadow:0 0 8px #00ff41;animation:blink 1s infinite}
 .dot.race_ended{background:#f59e0b}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
-.tb-stat{font-size:.85rem;letter-spacing:2px;text-transform:uppercase;color:#555;min-width:100px}
+.tb-stat{font-size:1rem;letter-spacing:2px;text-transform:uppercase;color:#666;min-width:110px}
 .tb-stat.receiving{color:#00ff41}
 .tb-stat.race_ended{color:#f59e0b}
 .tb-meta{display:flex;gap:20px;flex:1;font-size:.88rem;letter-spacing:1px;overflow:hidden}
@@ -1136,15 +1136,15 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 .row-hero{flex:0 0 auto;display:grid;grid-template-columns:1fr 1.2fr 2fr;min-height:0;border-bottom:1px solid #111}
 .hero-cell{display:flex;flex-direction:column;justify-content:center;align-items:center;padding:14px 10px}
 .hero-cell.rpmcell{align-items:stretch;padding:18px 22px;border-left:1px solid #111}
-.hero-lbl{font-size:.72rem;color:#555;text-transform:uppercase;letter-spacing:3px;margin-bottom:4px}
+.hero-lbl{font-size:1rem;color:#999;text-transform:uppercase;letter-spacing:3px;margin-bottom:4px}
 .gear-val{font-size:clamp(5rem,16vw,11rem);font-weight:900;line-height:1;color:#fff;letter-spacing:-4px}
 .gear-val.N{color:#444}
 .gear-val.R{color:#ef4444}
 .speed-val{font-size:clamp(3rem,9vw,6.5rem);font-weight:900;line-height:1;color:#fff;letter-spacing:-2px}
-.speed-unit{font-size:.78rem;color:#555;text-transform:uppercase;letter-spacing:3px;margin-top:4px}
+.speed-unit{font-size:1rem;color:#999;text-transform:uppercase;letter-spacing:3px;margin-top:4px}
 .rpm-lbl-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
-.rpm-lbl{font-size:.72rem;color:#555;text-transform:uppercase;letter-spacing:3px}
-.rpm-pct{font-size:.85rem;font-weight:bold;color:#888}
+.rpm-lbl{font-size:1rem;color:#999;text-transform:uppercase;letter-spacing:3px}
+.rpm-pct{font-size:1rem;font-weight:bold;color:#bbb}
 .rpm-track{flex:1;background:#0d0d0d;border-radius:3px;overflow:hidden;height:clamp(28px,5vh,48px);position:relative}
 .rpm-fill{height:100%;width:0%;transition:width .04s linear}
 .rpm-fill.lo  {background:#1a5c30}
@@ -1153,19 +1153,19 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 .rpm-fill.shift{background:#ef4444;animation:sf .1s infinite}
 @keyframes sf{0%,100%{box-shadow:inset 0 0 20px #ef000066}50%{box-shadow:inset 0 0 40px #ff440099}}
 .rpm-gear-mark{position:absolute;top:0;bottom:0;width:2px;background:#1a1a1a}
-.rpm-num{font-size:.78rem;color:#555;margin-top:6px;text-align:right;letter-spacing:1px}
+.rpm-num{font-size:.9rem;color:#888;margin-top:6px;text-align:right;letter-spacing:1px}
 /* speed split (hero top-right) */
 .hero-cell.speedcell{border-left:1px solid #111}
 
 /* ── ROW 2: PEDALS ── */
 .row-pedals{flex:none;border-bottom:1px solid #111;padding:12px 22px;display:flex;flex-direction:column;gap:10px}
 .pedal-row{display:flex;align-items:center;gap:14px}
-.pedal-lbl{font-size:.72rem;color:#666;text-transform:uppercase;letter-spacing:2px;width:80px;flex:none}
+.pedal-lbl{font-size:1rem;color:#999;text-transform:uppercase;letter-spacing:2px;width:90px;flex:none}
 .pedal-track{flex:1;background:#0d0d0d;border-radius:2px;overflow:hidden;height:20px}
 .pedal-fill{height:100%;width:0%;border-radius:2px;transition:width .04s linear}
 .thr-fill{background:#00ff41}
 .brk-fill{background:#ef4444}
-.pedal-pct{font-size:1.05rem;font-weight:900;width:46px;text-align:right;flex:none}
+.pedal-pct{font-size:1.3rem;font-weight:900;width:54px;text-align:right;flex:none}
 .thr-pct{color:#00ff41}
 .brk-pct{color:#ef4444}
 
@@ -1174,24 +1174,24 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 
 /* slip panel */
 .slip-panel{padding:14px 22px;border-right:1px solid #111}
-.panel-lbl{font-size:.68rem;color:#555;text-transform:uppercase;letter-spacing:3px;margin-bottom:10px}
+.panel-lbl{font-size:1rem;color:#999;text-transform:uppercase;letter-spacing:3px;margin-bottom:10px}
 .slip-row{display:flex;align-items:center;gap:12px;margin-bottom:8px}
 .slip-row:last-child{margin-bottom:0}
-.slip-corner{font-size:.72rem;color:#666;letter-spacing:1px;width:22px;flex:none}
+.slip-corner{font-size:1rem;color:#aaa;letter-spacing:1px;width:28px;flex:none;font-weight:bold}
 .slip-track{flex:1;background:#0d0d0d;border-radius:2px;overflow:hidden;height:16px}
 .slip-fill{height:100%;width:0%;border-radius:2px;transition:width .08s linear}
-.slip-val{font-size:.9rem;font-weight:bold;width:42px;text-align:right;flex:none;transition:color .1s}
+.slip-val{font-size:1.1rem;font-weight:bold;width:48px;text-align:right;flex:none;transition:color .1s}
 .slip-warn{font-size:.85rem;width:16px;flex:none;text-align:center;opacity:0}
 
 /* timing panel */
 .timing-panel{padding:14px 22px}
 .timing-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px}
 .t-cell{}
-.t-lbl{font-size:.65rem;color:#555;text-transform:uppercase;letter-spacing:2px;margin-bottom:3px}
-.t-val{font-size:1.1rem;font-weight:900;color:#e0e0e0;letter-spacing:.5px}
+.t-lbl{font-size:.9rem;color:#999;text-transform:uppercase;letter-spacing:2px;margin-bottom:3px}
+.t-val{font-size:1.25rem;font-weight:900;color:#e0e0e0;letter-spacing:.5px}
 .t-val.green{color:#22c55e}
 .delta-row{grid-column:1/-1;margin-top:4px;padding-top:8px;border-top:1px solid #111;display:flex;align-items:baseline;gap:10px}
-.delta-lbl{font-size:.65rem;color:#555;text-transform:uppercase;letter-spacing:2px}
+.delta-lbl{font-size:.9rem;color:#999;text-transform:uppercase;letter-spacing:2px}
 .delta-val{font-size:1.4rem;font-weight:900;letter-spacing:-1px}
 .delta-val.ahead{color:#22c55e}
 .delta-val.behind{color:#ef4444}
@@ -1199,11 +1199,11 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 
 /* ── ROW 4: TYRES ── */
 .row-tyres{flex:none;padding:10px 22px;display:flex;align-items:center;gap:20px;border-bottom:1px solid #0a0a0a}
-.tyres-lbl{font-size:.68rem;color:#555;text-transform:uppercase;letter-spacing:3px;flex:none}
+.tyres-lbl{font-size:1rem;color:#999;text-transform:uppercase;letter-spacing:3px;flex:none}
 .tyre-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 16px}
 .tyre-cell{display:flex;align-items:center;gap:6px}
-.tyre-corner{font-size:.65rem;color:#555;letter-spacing:1px;width:20px}
-.tyre-temp{font-size:.9rem;font-weight:bold;min-width:44px;transition:color .2s}
+.tyre-corner{font-size:.95rem;color:#aaa;letter-spacing:1px;width:26px;font-weight:bold}
+.tyre-temp{font-size:1.1rem;font-weight:bold;min-width:52px;transition:color .2s}
 .tyre-temp.cold{color:#5b9bd5}
 .tyre-temp.ok  {color:#22c55e}
 .tyre-temp.hot {color:#f59e0b}
@@ -2067,9 +2067,14 @@ canvas{display:block;cursor:crosshair}
 .analysis-area{flex:1;overflow-y:auto;display:none;flex-direction:column}
 .analysis-area::-webkit-scrollbar{width:4px}.analysis-area::-webkit-scrollbar-thumb{background:#1a1a2a}
 .analysis-inner{padding:24px 28px;max-width:720px}
-.btn-analyze{background:#22c55e;color:#000;border:none;font-family:inherit;font-size:.85rem;font-weight:bold;padding:10px 24px;border-radius:4px;cursor:pointer;letter-spacing:1px;margin-bottom:20px}
+.btn-analyze{background:#22c55e;color:#000;border:none;font-family:inherit;font-size:.85rem;font-weight:bold;padding:10px 24px;border-radius:4px;cursor:pointer;letter-spacing:1px}
 .btn-analyze:hover{background:#16a34a}
 .btn-analyze:disabled{background:#1a3a1a;color:#2a6a2a;cursor:default}
+.btn-reanalyze{background:none;border:1px solid #2a2a3a;color:#666;font-family:inherit;font-size:.78rem;padding:8px 16px;border-radius:4px;cursor:pointer;letter-spacing:1px}
+.btn-reanalyze:hover{border-color:#555;color:#ccc}
+.btn-reanalyze:disabled{opacity:.4;cursor:default}
+.analysis-meta{font-size:.72rem;color:#555;letter-spacing:.5px}
+.analysis-meta.cached{color:#22c55e66}
 .analysis-body{font-size:.85rem;line-height:1.75;color:#ccc;white-space:pre-wrap;border-top:1px solid #1a1a28;padding-top:18px;display:none}
 .analysis-err{color:#ef4444;font-size:.8rem;margin-top:12px}
 </style>
@@ -2120,7 +2125,11 @@ canvas{display:block;cursor:crosshair}
     </div>
     <div class="analysis-area" id="analysis-area">
       <div class="analysis-inner" id="analysis-inner">
-        <button class="btn-analyze" id="btn-analyze" onclick="runAnalysis()">Analyze with Claude</button>
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:20px;flex-wrap:wrap">
+          <button class="btn-analyze" id="btn-analyze" onclick="runAnalysis(false)">Analyze with Claude</button>
+          <button class="btn-reanalyze" id="btn-reanalyze" onclick="runAnalysis(true)" style="display:none">Re-analyze</button>
+          <span class="analysis-meta" id="analysis-meta"></span>
+        </div>
         <div class="analysis-body" id="analysis-body"></div>
       </div>
     </div>
@@ -2190,6 +2199,10 @@ async function pick(id) {
   document.getElementById('analysis-body').textContent='';
   document.getElementById('btn-analyze').textContent='Analyze with Claude';
   document.getElementById('btn-analyze').disabled=false;
+  document.getElementById('btn-analyze').style.display='inline-block';
+  document.getElementById('btn-reanalyze').style.display='none';
+  document.getElementById('analysis-meta').textContent='';
+  document.getElementById('analysis-meta').className='analysis-meta';
   const prevErr=document.getElementById('analysis-err'); if(prevErr) prevErr.remove();
   renderHeader();
   document.getElementById('empty').style.display='none';
@@ -2214,37 +2227,51 @@ function switchTab(tab, el) {
     if(_cur) { renderLapBar(); renderCharts(); }
   } else if(tab==='analysis'){
     aa.style.display='flex';
+    if(_cur) loadAnalysis(_cur.session_id, false);
   }
 }
 
-let _analysisCache = {};
-async function runAnalysis() {
-  if(!_cur) return;
-  const sid = _cur.session_id;
-  const btn = document.getElementById('btn-analyze');
+async function loadAnalysis(sid, force) {
+  const btn  = document.getElementById('btn-analyze');
+  const rbtn = document.getElementById('btn-reanalyze');
   const body = document.getElementById('analysis-body');
-  const cached = _analysisCache[sid];
-  if(cached){ body.textContent=cached; body.style.display='block'; return; }
-  btn.disabled=true; btn.textContent='Analyzing…';
-  body.style.display='none'; body.textContent='';
+  const meta = document.getElementById('analysis-meta');
   const errEl = document.getElementById('analysis-err');
   if(errEl) errEl.remove();
+
+  const url = '/analyze?id='+encodeURIComponent(sid)+(force?'&force=true':'');
+  btn.disabled=true; rbtn.disabled=true;
+  if(force){ rbtn.textContent='Analyzing…'; } else { btn.textContent='Checking…'; }
+
   try {
-    const r = await fetch('/analyze?id='+encodeURIComponent(sid));
+    const r = await fetch(url);
     const d = await r.json();
     if(!r.ok) throw new Error(d.error||'Unknown error');
-    _analysisCache[sid] = d.analysis;
     body.textContent = d.analysis;
     body.style.display = 'block';
-    btn.textContent = 'Re-analyze';
+    btn.style.display = 'none';
+    rbtn.style.display = 'inline-block';
+    rbtn.textContent = 'Re-analyze';
+    rbtn.disabled = false;
+    if(d.analyzed_at) {
+      const dt = new Date(d.analyzed_at).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+      meta.textContent = 'Analyzed '+dt+(d.model?' · '+d.model:'');
+      meta.className = 'analysis-meta cached';
+    }
   } catch(e) {
+    body.style.display='none';
+    btn.disabled=false; btn.textContent='Analyze with Claude'; btn.style.display='inline-block';
+    rbtn.disabled=false; rbtn.style.display='none';
+    meta.textContent=''; meta.className='analysis-meta';
     const err = document.createElement('div');
     err.id='analysis-err'; err.className='analysis-err';
-    err.textContent = '✗ ' + e.message;
+    err.textContent='✗ '+e.message;
     document.getElementById('analysis-inner').appendChild(err);
-    btn.textContent = 'Analyze with Claude';
   }
-  btn.disabled=false;
+}
+
+async function runAnalysis(force) {
+  if(_cur) loadAnalysis(_cur.session_id, !!force);
 }
 
 function renderHeader() {
@@ -2591,7 +2618,8 @@ def _summarize_lap(lap: dict) -> Optional[dict]:
     }
 
 
-def _build_analysis_prompt(session: dict, laps: list, historical: list) -> str:
+def _build_analysis_prompt(session: dict, laps: list, historical: list,
+                           prev_analyses: Optional[list] = None) -> str:
     game  = session.get("game", "unknown").replace("_", " ").title()
     track = session.get("track", "unknown")
     car   = session.get("car", "unknown")
@@ -2621,17 +2649,25 @@ def _build_analysis_prompt(session: dict, laps: list, historical: list) -> str:
 
     hist_block = ""
     if historical:
-        hist_block = f"\nHISTORICAL — {track} (last {min(len(historical),5)} sessions):\n"
-        for h in historical[-5:]:
-            h_date  = (h.get("started_at") or "")[:10]
-            h_best  = h.get("best_lap_time_s")
-            h_laps  = len(h.get("laps", []))
+        hist_block = f"\nHISTORICAL SESSIONS — {track} (most recent first):\n"
+        for h in reversed(historical[-5:]):
+            h_date = (h.get("started_at") or "")[:10]
+            h_best = h.get("best_lap_time_s")
+            h_laps = len(h.get("laps", []))
             if h_best:
                 hist_block += f"  {h_date}  best: {h_best:.3f}s  laps: {h_laps}\n"
 
-    return f"""You are a sim racing telemetry analyst. Analyze the session below and give direct, data-driven coaching.
+    prev_block = ""
+    if prev_analyses:
+        prev_block = f"\nPREVIOUS AI COACHING NOTES — {track}:\n"
+        for a in prev_analyses[-3:]:
+            a_date = (a.get("analyzed_at") or "")[:10]
+            prev_block += f"\n[Session analyzed {a_date}]\n{a.get('analysis', '')}\n"
 
-SESSION: {game} | Track: {track} | Car: {car} | Date: {date}
+    return f"""You are a sim racing telemetry analyst with memory of this driver's history on this track.
+{prev_block}
+---
+NOW ANALYZE THIS SESSION: {game} | Track: {track} | Car: {car} | Date: {date}
 Best lap: {f"{best:.3f}s" if best else "—"} | Avg: {f"{avg:.3f}s" if avg else "—"} | Consistency (σ): {cons:.3f}s
 {hist_block}
 LAP TABLE (◄ = best lap):
@@ -2643,7 +2679,7 @@ Write 3–5 focused paragraphs covering:
 2. Driving style — what do throttle, brake, and G-lat numbers reveal?
 3. Stability — what does the slip trend across laps indicate?
 4. The single most impactful area to improve, with a specific suggestion.
-5. Historical comparison — are they faster or slower than previous visits? (skip if no history)
+5. Progress compared to previous sessions on this track — are the earlier coaching points being addressed? (skip if no prior analyses)
 
 Be specific. Use the numbers. No generic advice."""
 
@@ -2795,39 +2831,61 @@ async def handle_status(reader, writer):
             qs = {k: urllib.parse.unquote_plus(v)
                   for pair in query_string.split("&") if "=" in pair
                   for k, v in [pair.split("=", 1)]}
-            sid = qs.get("id", "")
-            sessions_dir = storage_path() / "sessions"
-            try:
-                session_data = json.loads((sessions_dir / f"{sid}.json").read_text())
-                laps_data    = json.loads((sessions_dir / f"{sid}_laps.json").read_text())
-            except OSError:
-                writer.write(_http_response("404 Not Found", "application/json",
-                                            json.dumps({"error": "Session not found"}).encode()))
+            sid   = qs.get("id", "")
+            force = qs.get("force", "") == "true"
+            sessions_dir  = storage_path() / "sessions"
+            analysis_file = sessions_dir / f"{sid}_analysis.json"
+
+            # Serve cached result unless caller requests a fresh one
+            if not force and analysis_file.exists():
+                writer.write(_http_response("200 OK", "application/json", analysis_file.read_bytes()))
             else:
-                track = session_data.get("track", "unknown")
-                historical = []
-                if track and track != "unknown":
-                    for f in sorted(sessions_dir.glob("*_[!l]*.json")):
-                        if f.stem == sid:
-                            continue
-                        try:
-                            h = json.loads(f.read_text())
-                            if h.get("track") == track:
-                                historical.append(h)
-                        except Exception:
-                            pass
                 try:
-                    prompt   = _build_analysis_prompt(session_data, laps_data, historical)
-                    analysis = await asyncio.to_thread(_call_claude_api, prompt)
-                    result   = json.dumps({"analysis": analysis, "session_id": sid}).encode()
-                    writer.write(_http_response("200 OK", "application/json", result))
-                except ValueError as exc:
-                    writer.write(_http_response("400 Bad Request", "application/json",
-                                                json.dumps({"error": str(exc)}).encode()))
-                except Exception as exc:
-                    log.error(f"Claude API error: {exc}")
-                    writer.write(_http_response("502 Bad Gateway", "application/json",
-                                                json.dumps({"error": f"API error: {exc}"}).encode()))
+                    session_data = json.loads((sessions_dir / f"{sid}.json").read_text())
+                    laps_data    = json.loads((sessions_dir / f"{sid}_laps.json").read_text())
+                except OSError:
+                    writer.write(_http_response("404 Not Found", "application/json",
+                                                json.dumps({"error": "Session not found"}).encode()))
+                else:
+                    track = session_data.get("track", "unknown")
+                    historical    = []
+                    prev_analyses = []
+                    if track and track != "unknown":
+                        for f in sorted(sessions_dir.glob("*.json")):
+                            if f.name.endswith("_laps.json") or f.name.endswith("_analysis.json"):
+                                continue
+                            if f.stem == sid:
+                                continue
+                            try:
+                                h = json.loads(f.read_text())
+                                if h.get("track") == track:
+                                    historical.append(h)
+                                    af = sessions_dir / f"{f.stem}_analysis.json"
+                                    if af.exists():
+                                        prev_analyses.append(json.loads(af.read_text()))
+                            except Exception:
+                                pass
+                    try:
+                        prompt   = _build_analysis_prompt(session_data, laps_data,
+                                                          historical, prev_analyses)
+                        analysis = await asyncio.to_thread(_call_claude_api, prompt)
+                        result_obj = {
+                            "session_id":  sid,
+                            "analyzed_at": datetime.now().isoformat(),
+                            "model":       config.get("anthropic_model", "claude-sonnet-4-6"),
+                            "cached":      False,
+                            "analysis":    analysis,
+                        }
+                        analysis_file.write_text(json.dumps(result_obj, indent=2))
+                        writer.write(_http_response("200 OK", "application/json",
+                                                    json.dumps(result_obj).encode()))
+                    except ValueError as exc:
+                        writer.write(_http_response("400 Bad Request", "application/json",
+                                                    json.dumps({"error": str(exc)}).encode()))
+                    except Exception as exc:
+                        log.error(f"Claude API error: {exc}")
+                        writer.write(_http_response("502 Bad Gateway", "application/json",
+                                                    json.dumps({"error": f"API error: {exc}"}).encode()))
 
         elif path == "/reset" and method == "POST":
             for game in PORTS:
