@@ -137,6 +137,33 @@ def disk_info() -> dict:
 FM_PACKET_SIZE    = 311  # Forza Motorsport 2023 / FM7 Car Dash
 FM_PACKET_SIZE_FH = 331  # Forza Horizon 4 / 5 Car Dash (adds tire wear + track ordinal)
 
+# FH5 circuit track ordinals (community-sourced; open-world routes = 0)
+FH5_TRACKS = {
+    5: "Goliath Circuit", 6: "Colossus Circuit", 7: "Titan Circuit",
+    8: "Marathon Circuit", 9: "Gauntlet Circuit",
+    20: "Bahía de Playa Circuit", 21: "Bola Ocho Circuit",
+    22: "Copper Canyon Circuit", 23: "Estadio Circuit",
+    24: "Gran Caldera Circuit", 25: "La Selva Circuit",
+    26: "Mulege Circuit", 27: "Playa Azul Circuit",
+    28: "Reserva Circuit", 29: "San Juan Circuit",
+    30: "Tulum Circuit", 31: "Valle de las Ranas Circuit",
+    61: "Horizon Mexico Festival", 62: "El Camino",
+}
+
+# FM2023 track ordinals
+FM23_TRACKS = {
+    1: "Maple Valley", 2: "Mugello", 3: "Brands Hatch", 4: "Circuit de Catalunya",
+    5: "Circuit de la Sarthe", 6: "Daytona International Speedway",
+    7: "Fujimi Kaido", 8: "Grand Oak Raceway", 9: "Hakone",
+    10: "Homestead-Miami Speedway", 11: "Indianapolis Motor Speedway",
+    12: "Laguna Seca Raceway", 13: "Lime Rock Park", 14: "Maple Valley Long",
+    15: "Monza Circuit", 16: "Nürburgring GP", 17: "Nürburgring",
+    18: "Road America", 19: "Road Atlanta", 20: "Sebring",
+    21: "Silverstone", 22: "Silverstone GP", 23: "Spa-Francorchamps",
+    24: "Suzuka Circuit", 25: "Watkins Glen", 26: "Yas Marina",
+    27: "Autodromo Internazionale del Mugello",
+}
+
 # i I [51×f] [5×i: car_ordinal/class/pi/drivetrain/cylinders] [17×f] H [6×B] [3×b]
 # drivetrain_type and num_cylinders are int32 per spec, not float.
 FM_FORMAT    = "<iIfffffffffffffffffffffffffffffffffffffffffffffffffffiiiiifffffffffffffffffHBBBBBBbbb"
@@ -193,11 +220,15 @@ def parse_forza(data: bytes) -> Optional[dict]:
         values = struct.unpack(fmt, data)
         parsed = dict(zip(FM_FIELDS, values))
         if len(data) == FM_PACKET_SIZE_FH:
-            parsed["tire_wear_fl"]   = values[len(FM_FIELDS)]
-            parsed["tire_wear_fr"]   = values[len(FM_FIELDS) + 1]
-            parsed["tire_wear_rl"]   = values[len(FM_FIELDS) + 2]
-            parsed["tire_wear_rr"]   = values[len(FM_FIELDS) + 3]
-            parsed["track_ordinal"]  = values[len(FM_FIELDS) + 4]
+            parsed["tire_wear_fl"]  = values[len(FM_FIELDS)]
+            parsed["tire_wear_fr"]  = values[len(FM_FIELDS) + 1]
+            parsed["tire_wear_rl"]  = values[len(FM_FIELDS) + 2]
+            parsed["tire_wear_rr"]  = values[len(FM_FIELDS) + 3]
+            ord_val                 = values[len(FM_FIELDS) + 4]
+            parsed["track_ordinal"] = ord_val
+            parsed["track"]         = FH5_TRACKS.get(ord_val, f"FH5 Track #{ord_val}" if ord_val else "unknown")
+        else:
+            parsed["track"] = "unknown"  # FM2023 doesn't broadcast track in telemetry
         parsed["speed_mph"]      = parsed["speed"] * 2.237
         parsed["throttle_pct"]   = parsed["accel"] / 255 * 100
         parsed["brake_pct"]      = parsed["brake"] / 255 * 100
@@ -475,6 +506,16 @@ def parse_f1(data: bytes) -> Optional[dict]:
 
 # ─── Session Manager ──────────────────────────────────────────────────────────
 
+def _is_driving(parsed: dict) -> bool:
+    """True when the player has meaningful input — not parked or in a menu."""
+    return (
+        parsed.get("speed_mph", 0) > 2 or
+        parsed.get("throttle_pct", 0) > 2 or
+        parsed.get("brake_pct", 0) > 2 or
+        abs(parsed.get("steer", 0)) > 5
+    )
+
+
 class LapRecord:
     def __init__(self, lap_number: int):
         self.lap_number  = lap_number
@@ -619,13 +660,7 @@ class Session:
         self.current_lap = LapRecord(new_lap)
 
     def _is_driving(self, parsed: dict) -> bool:
-        """True when the player is actively doing something — not parked/in menu."""
-        return (
-            parsed.get("speed_mph", 0) > 2 or
-            parsed.get("throttle_pct", 0) > 2 or
-            parsed.get("brake_pct", 0) > 2 or
-            abs(parsed.get("steer", 0)) > 5
-        )
+        return _is_driving(parsed)
 
     def is_timed_out(self) -> bool:
         return time.time() - self.last_packet > SESSION_TIMEOUT_S
@@ -789,11 +824,21 @@ class TelemetryProtocol(asyncio.DatagramProtocol):
         rpm   = parsed.get("rpm", parsed.get("current_engine_rpm", 0))
         _debug_push(f"{ts} [UDP OK]  {self.game} {len(data)}B  {speed:.0f}mph  rpm={rpm:.0f}  gear={gear}")
 
+        driving = _is_driving(parsed)
+
         if self.game not in active_sessions:
+            if not driving:
+                return  # don't create a session from an idle broadcast
             session = Session(self.game, datetime.now())
             active_sessions[self.game] = session
 
         session = active_sessions[self.game]
+
+        if not driving:
+            session.last_packet = time.time()  # keep alive timer running
+            update_state(self.game, session, parsed)
+            return  # don't record idle packets
+
         session.ingest(data, parsed)
         update_state(self.game, session, parsed)
 
