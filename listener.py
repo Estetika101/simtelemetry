@@ -7,6 +7,7 @@ Exposes local web status server at http://pi.local:8000
 """
 
 import asyncio
+import collections
 import json
 import logging
 import os
@@ -87,6 +88,27 @@ logging.basicConfig(
     handlers=[_log_handler, logging.StreamHandler()],
 )
 log = logging.getLogger("simtelemetry")
+
+# ─── Debug Console ────────────────────────────────────────────────────────────
+
+_debug_clients: list = []
+_debug_buffer: collections.deque = collections.deque(maxlen=500)
+
+def _debug_push(line: str):
+    _debug_buffer.append(line)
+    for q in list(_debug_clients):
+        try:
+            q.put_nowait(line)
+        except Exception:
+            pass
+
+class _DebugLogHandler(logging.Handler):
+    def emit(self, record):
+        _debug_push(self.format(record))
+
+_dbg_log_handler = _DebugLogHandler()
+_dbg_log_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"))
+log.addHandler(_dbg_log_handler)
 
 # ─── Storage Setup ────────────────────────────────────────────────────────────
 
@@ -663,6 +685,8 @@ state = {
     "last_packet_at":   None,
     # per-game raw UDP counters (arrive regardless of whether parse succeeds)
     "udp_received": {"forza_motorsport": 0, "acc": 0, "f1": 0},
+    "udp_rejected": {"forza_motorsport": 0, "acc": 0, "f1": 0},
+    "last_rejected_size": {"forza_motorsport": None, "acc": None, "f1": None},
 }
 
 active_sessions: dict[str, Session] = {}
@@ -708,15 +732,27 @@ class TelemetryProtocol(asyncio.DatagramProtocol):
 
         parsed = self.parser(data)
         if not parsed:
-            if not self._logged_size:
-                self._logged_size = True
+            count = state["udp_rejected"].get(self.game, 0) + 1
+            state["udp_rejected"][self.game] = count
+            state["last_rejected_size"][self.game] = len(data)
+            ts = datetime.now().strftime("%H:%M:%S")
+            _debug_push(f"{ts} [REJECTED] {self.game} {len(data)}B from {addr[0]}")
+            # Log on first rejection and every 100th after
+            if count == 1 or count % 100 == 0:
                 log.warning(
-                    f"[{self.game}] packet from {addr[0]} rejected — "
-                    f"size={len(data)} bytes (expected {FM_PACKET_SIZE} for forza, "
-                    f">=100 for acc, >={F1_HEADER_SIZE} for f1). "
-                    f"Check game Data Out format/port settings."
+                    f"[{self.game}] packet #{count} from {addr[0]} rejected — "
+                    f"size={len(data)} bytes. "
+                    f"Forza expects {FM_PACKET_SIZE} (Car Dash format), "
+                    f"ACC expects >={100}, F1 expects >={F1_HEADER_SIZE}. "
+                    f"Check Data Out settings."
                 )
             return
+
+        ts = datetime.now().strftime("%H:%M:%S")
+        speed = parsed.get("speed_mph", 0)
+        gear  = parsed.get("gear", parsed.get("current_engine_rpm", "?"))
+        rpm   = parsed.get("rpm", parsed.get("current_engine_rpm", 0))
+        _debug_push(f"{ts} [UDP OK]  {self.game} {len(data)}B  {speed:.0f}mph  rpm={rpm:.0f}  gear={gear}")
 
         if self.game not in active_sessions:
             session = Session(self.game, datetime.now())
@@ -995,7 +1031,28 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <div class="slip-box"><div class="pos">RL slip</div><div class="val" id="slip-rl">—</div></div>
   <div class="slip-box"><div class="pos">RR slip</div><div class="val" id="slip-rr">—</div></div>
 </div>
-<div class="meta" id="udp-counters" style="margin-top:16px;font-size:0.65rem;color:#333"></div>
+<div style="margin-top:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+  <div class="meta" id="udp-counters" style="font-size:0.65rem;color:#333;flex:1"></div>
+  <button onclick="resetCounters()" style="background:#1a1a1f;border:1px solid #2a2a3a;color:#555;font-family:inherit;font-size:0.65rem;padding:4px 10px;border-radius:3px;cursor:pointer" onmouseover="this.style.color='#aaa'" onmouseout="this.style.color='#555'">Reset</button>
+  <button onclick="toggleDebug()" id="dbg-btn" style="background:#1a1a1f;border:1px solid #2a2a3a;color:#555;font-family:inherit;font-size:0.65rem;padding:4px 10px;border-radius:3px;cursor:pointer" onmouseover="this.style.color='#aaa'" onmouseout="if(!_dbgOpen)this.style.color='#555'">Debug</button>
+</div>
+<div id="debug-panel" style="display:none;margin-top:10px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+    <span style="font-size:0.6rem;color:#444;text-transform:uppercase;letter-spacing:2px">Debug Console</span>
+    <div style="display:flex;gap:10px;align-items:center">
+      <label style="font-size:0.6rem;color:#444;cursor:pointer;display:flex;align-items:center;gap:4px">
+        <input type="checkbox" id="dbg-autoscroll" checked> autoscroll
+      </label>
+      <select id="dbg-filter" onchange="applyFilter()" style="background:#1a1a1f;border:1px solid #1e1e28;color:#555;font-family:inherit;font-size:0.6rem;padding:2px 6px;border-radius:3px">
+        <option value="all">All</option>
+        <option value="warn">Warnings+</option>
+        <option value="udp">UDP only</option>
+      </select>
+      <button onclick="clearDebug()" style="background:#1a1a1f;border:1px solid #1e1e28;color:#444;font-family:inherit;font-size:0.6rem;padding:3px 8px;border-radius:3px;cursor:pointer">Clear</button>
+    </div>
+  </div>
+  <div id="debug-log" style="background:#050508;border:1px solid #111118;border-radius:4px;height:260px;overflow-y:auto;font-size:0.68rem;padding:8px 10px;font-family:'Courier New',monospace;line-height:1.6"></div>
+</div>
 <script>
 const $ = id => document.getElementById(id);
 const es = new EventSource('/stream');
@@ -1022,14 +1079,99 @@ es.onmessage = e => {
   $('compound-meta').textContent = d.tyre_compound || '';
   $('drs-badge').className = d.drs ? 'on' : 'off';
   const udp = d.udp_received || {};
+  const rej = d.udp_rejected || {};
+  const rsz = d.last_rejected_size || {};
   const parts = ['forza_motorsport','acc','f1'].map(g => {
-    const n = udp[g] || 0;
-    const col = n > 0 ? '#22c55e' : '#333';
-    return `<span style="color:${col}">${g.replace('_',' ')}: ${n} udp</span>`;
+    const n = udp[g] || 0, r = rej[g] || 0;
+    const col = n > 0 ? '#22c55e' : (r > 0 ? '#ef4444' : '#333');
+    const label = g.replace('_',' ');
+    let txt = `<span style="color:${col}">${label}: ${n} ok`;
+    if (r > 0) txt += ` / <span style="color:#ef4444">${r} rejected`;
+    if (rsz[g]) txt += ` (${rsz[g]}B)`;
+    if (r > 0) txt += `</span>`;
+    txt += `</span>`;
+    return txt;
   });
   $('udp-counters').innerHTML = parts.join('<span style="color:#222"> &nbsp;·&nbsp; </span>');
 };
 es.onerror = () => { $('dot').className = 'status-dot idle'; };
+async function resetCounters() {
+  await fetch('/reset', { method: 'POST' });
+}
+
+// ── debug console ─────────────────────────────────────────────────────────────
+let _dbgEs = null, _dbgOpen = false;
+const _dbgLines = [];
+
+function toggleDebug() {
+  _dbgOpen = !_dbgOpen;
+  const panel = document.getElementById('debug-panel');
+  const btn   = document.getElementById('dbg-btn');
+  panel.style.display = _dbgOpen ? 'block' : 'none';
+  btn.style.color = _dbgOpen ? '#22c55e' : '#555';
+  btn.style.borderColor = _dbgOpen ? '#22c55e44' : '#2a2a3a';
+  if (_dbgOpen && !_dbgEs) startDebugStream();
+}
+
+function startDebugStream() {
+  _dbgEs = new EventSource('/debug-stream');
+  _dbgEs.onmessage = e => appendDebug(JSON.parse(e.data));
+  _dbgEs.onerror = () => {
+    _dbgEs = null;
+    if (_dbgOpen) setTimeout(startDebugStream, 2000);
+  };
+}
+
+function lineColor(line) {
+  if (line.includes('[ERROR]'))    return '#ef4444';
+  if (line.includes('[WARNING]'))  return '#f59e0b';
+  if (line.includes('[REJECTED]')) return '#f59e0b';
+  if (line.includes('[UDP OK]'))   return '#22c55e55';
+  if (line.includes('[INFO]'))     return '#3a3a4a';
+  return '#3a3a4a';
+}
+
+function lineVisible(line) {
+  const f = document.getElementById('dbg-filter').value;
+  if (f === 'warn') return line.includes('[ERROR]') || line.includes('[WARNING]') || line.includes('[REJECTED]');
+  if (f === 'udp')  return line.includes('[UDP OK]') || line.includes('[REJECTED]');
+  return true;
+}
+
+function appendDebug(line) {
+  _dbgLines.push(line);
+  if (_dbgLines.length > 2000) _dbgLines.shift();
+  if (!lineVisible(line)) return;
+  const el = document.getElementById('debug-log');
+  const div = document.createElement('div');
+  div.style.color = lineColor(line);
+  div.style.borderBottom = '1px solid #0a0a10';
+  div.style.padding = '1px 0';
+  div.dataset.line = line;
+  div.textContent = line;
+  el.appendChild(div);
+  while (el.children.length > 1000) el.removeChild(el.firstChild);
+  if (document.getElementById('dbg-autoscroll').checked) el.scrollTop = el.scrollHeight;
+}
+
+function applyFilter() {
+  const el = document.getElementById('debug-log');
+  el.innerHTML = '';
+  _dbgLines.filter(lineVisible).slice(-500).forEach(line => {
+    const div = document.createElement('div');
+    div.style.color = lineColor(line);
+    div.style.borderBottom = '1px solid #0a0a10';
+    div.style.padding = '1px 0';
+    div.textContent = line;
+    el.appendChild(div);
+  });
+  el.scrollTop = el.scrollHeight;
+}
+
+function clearDebug() {
+  _dbgLines.length = 0;
+  document.getElementById('debug-log').innerHTML = '';
+}
 </script>
 </body>
 </html>
@@ -1548,6 +1690,13 @@ async def handle_status(reader, writer):
                     pass
             writer.write(_http_response("200 OK", "application/json", json.dumps(result, indent=2).encode()))
 
+        elif path == "/reset" and method == "POST":
+            for game in PORTS:
+                state["udp_received"][game] = 0
+                state["udp_rejected"][game] = 0
+                state["last_rejected_size"][game] = None
+            writer.write(_http_response("200 OK", "application/json", b'{"ok":true}'))
+
         elif path == "/admin" and method == "GET":
             writer.write(_http_response("200 OK", "text/html", ADMIN_HTML.encode()))
 
@@ -1605,6 +1754,28 @@ async def handle_status(reader, writer):
                     "entries": [], "error": str(exc),
                 }
             writer.write(_http_response("200 OK", "application/json", json.dumps(result).encode()))
+
+        elif path == "/debug-stream":
+            q: asyncio.Queue = asyncio.Queue(maxsize=2000)
+            _debug_clients.append(q)
+            writer.write(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Content-Type: text/event-stream\r\n"
+                b"Cache-Control: no-cache\r\n"
+                b"Access-Control-Allow-Origin: *\r\n"
+                b"Connection: keep-alive\r\n\r\n"
+            )
+            for line in list(_debug_buffer):
+                writer.write(f"data: {json.dumps(line)}\n\n".encode())
+            await writer.drain()
+            try:
+                while True:
+                    line = await q.get()
+                    writer.write(f"data: {json.dumps(line)}\n\n".encode())
+                    await writer.drain()
+            finally:
+                if q in _debug_clients:
+                    _debug_clients.remove(q)
 
         elif path == "/stream":
             writer.write(
