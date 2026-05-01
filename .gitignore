@@ -7,3 +7,5 @@ sessions/
 raw/
 logs/
 .DS_Store
+simtelemetry.config.json
+data/
