@@ -3254,7 +3254,7 @@ function setupInteraction(){
       const sign=d<0?'−':'+';
       lines.push(`Δ ${sign}${Math.abs(d).toFixed(3)}s  @${(pos*100).toFixed(1)}%`);
     }
-    tip.textContent=lines.join('\n');
+    tip.textContent=lines.join('\\n');
     tip.style.left=Math.min(e.clientX+14,window.innerWidth-180)+'px';
     tip.style.top=Math.max(8,e.clientY-tip.offsetHeight-8)+'px';
     tip.style.display='';
