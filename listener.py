@@ -704,7 +704,7 @@ class Session:
             self.car = str(parsed["car_ordinal"])
 
         # Forza: sample race_position for session type inference at close()
-        if self.game in ("forza_motorsport", "forza_horizon_5"):
+        if self.game == "forza_motorsport":
             rp = parsed.get("race_position")
             if rp is not None and rp > 0:
                 self._race_positions.append(rp)
