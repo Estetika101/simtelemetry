@@ -576,6 +576,10 @@ class LapRecord:
             sample["px"] = round(parsed["position_x"], 2)
             sample["py"] = round(parsed["position_y"], 2)
             sample["pz"] = round(parsed["position_z"], 2)
+        for corner in ("fl", "fr", "rl", "rr"):
+            v = parsed.get(f"tire_temp_{corner}")
+            if v is not None:
+                sample[f"tyre_{corner}"] = round(v, 1)
         self.samples.append(sample)
 
     def close(self, lap_time_s: Optional[float] = None):
@@ -2650,6 +2654,749 @@ init();
 </html>
 """
 
+TELEMETRY_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>SimTelemetry &middot; Telemetry</title>
+<style>
+""" + _CSS_TOKENS + """
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Courier New',monospace;min-height:100vh;overflow-x:hidden}
+a{color:inherit;text-decoration:none}
+.tb{height:50px;display:flex;align-items:center;padding:0 var(--sp-4);gap:14px;border-bottom:1px solid var(--border);background:var(--bg);z-index:20;position:sticky;top:0}
+.tb h1{font-size:1.3rem;color:var(--text);letter-spacing:3px;text-transform:uppercase;flex:1}
+.tb-nav{display:flex;gap:14px}
+.tb-nav a{font-size:.8rem;color:var(--text-muted);letter-spacing:1px;text-transform:uppercase}
+.tb-nav a:hover{color:#ccc}
+.tb-nav a.cur{color:var(--text);border-bottom:1px solid var(--n-200)}
+.breadcrumb{font-size:.75rem;color:var(--n-300);padding:8px var(--sp-5);border-bottom:1px solid var(--border-sub)}
+.breadcrumb a{color:var(--n-400)}.breadcrumb a:hover{color:var(--n-200)}
+.tele-layout{display:flex;min-height:calc(100vh - 90px)}
+.ctrl-col{width:220px;flex-shrink:0;border-right:1px solid var(--border-sub);padding:var(--sp-3) var(--sp-4);overflow-y:auto;position:sticky;top:50px;max-height:calc(100vh - 50px)}
+@media(max-width:768px){.tele-layout{flex-direction:column}.ctrl-col{width:100%;position:static;max-height:none;border-right:none;border-bottom:1px solid var(--border-sub)}}
+.ctrl-section{margin-bottom:var(--sp-4)}
+.ctrl-lbl{font-size:.58rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:2px;margin-bottom:var(--sp-2)}
+.lap-item{display:flex;align-items:center;gap:6px;padding:3px 4px;font-size:.76rem;cursor:pointer;border-radius:3px;user-select:none}
+.lap-item:hover{background:var(--surface)}
+.lap-swatch{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+.lap-time-s{color:var(--n-300);margin-left:auto;font-size:.7rem;font-variant-numeric:tabular-nums}
+.lap-best-badge{font-size:.6rem;color:var(--accent-soft)}
+input[type=checkbox]{accent-color:var(--accent);width:12px;height:12px;flex-shrink:0}
+.ch-grid{display:grid;grid-template-columns:1fr 1fr;gap:3px}
+.ch-tog{display:flex;align-items:center;gap:4px;font-size:.7rem;color:var(--n-200);padding:3px 4px;border-radius:3px;cursor:pointer;user-select:none}
+.ch-tog:hover{background:var(--surface)}
+.xmode-btns{display:flex;gap:3px}
+.xmode-btn{flex:1;background:var(--surface);border:1px solid var(--surface-bd);color:var(--text-muted);font-family:inherit;font-size:.7rem;padding:4px 0;border-radius:3px;cursor:pointer;text-align:center}
+.xmode-btn.active{background:var(--accent-bg);border-color:var(--accent-bd);color:var(--accent-soft)}
+.ctrl-sel{width:100%;background:var(--surface);border:1px solid var(--surface-bd);color:var(--text);font-family:inherit;font-size:.74rem;padding:5px 6px;border-radius:4px}
+.btn-reset-zoom{width:100%;background:none;border:1px solid var(--surface-bd);color:var(--text-muted);font-family:inherit;font-size:.7rem;padding:5px;border-radius:3px;cursor:pointer}
+.btn-reset-zoom:hover{border-color:var(--n-300);color:var(--text)}
+.panels-col{flex:1;min-width:0;padding:var(--sp-3) var(--sp-4) var(--sp-6)}
+.sector-hdr{margin-bottom:var(--sp-3);border:1px solid var(--border-sub);border-radius:4px;background:var(--bg-raised);overflow:hidden}
+.s-hdr-row{display:flex;align-items:center;padding:4px var(--sp-3);gap:var(--sp-2);border-bottom:1px solid var(--border-faint);font-size:.68rem}
+.s-hdr-row:last-child{border-bottom:none}
+.s-row-lbl{width:24px;color:var(--text-muted);font-size:.6rem;text-transform:uppercase;letter-spacing:1px;flex-shrink:0}
+.s-cell{flex:1;text-align:center;font-variant-numeric:tabular-nums;font-size:.7rem;color:var(--n-400)}
+.s-cell.best{color:var(--accent-soft);font-weight:bold}
+.s-cell-hd{flex:1;text-align:center;font-size:.58rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px}
+.lap-summaries{margin-bottom:var(--sp-3);display:flex;flex-direction:column;gap:3px}
+.lap-sum-bar{display:flex;align-items:center;gap:var(--sp-3);flex-wrap:wrap;padding:5px var(--sp-3);border-radius:4px;background:var(--bg-raised);border-left:3px solid}
+.lsb-l{font-size:.76rem;font-weight:900;width:48px;flex-shrink:0}
+.lsb-t{font-size:.88rem;font-weight:900;font-variant-numeric:tabular-nums;width:80px;flex-shrink:0}
+.lsb-s{font-size:.66rem;color:var(--n-400);font-variant-numeric:tabular-nums}
+.lsb-d{font-size:.76rem;font-variant-numeric:tabular-nums;margin-left:auto}
+.lsb-slip{font-size:.64rem;color:var(--n-500)}
+.panel-wrap{margin-bottom:2px}
+.panel-lbl-row{display:flex;align-items:center;margin-bottom:1px;min-height:14px}
+.p-lbl{font-size:.56rem;color:var(--n-500);text-transform:uppercase;letter-spacing:1.5px}
+.panel-svg-wrap{position:relative;overflow:hidden;border:1px solid var(--border-sub);border-radius:2px;background:var(--bg-raised);cursor:crosshair}
+.panel-svg-wrap svg{display:block;width:100%}
+.px-line{position:absolute;top:0;bottom:0;width:1px;background:rgba(255,255,255,.16);pointer-events:none;display:none}
+#tele-tip{position:fixed;background:var(--surface);border:1px solid var(--surface-bd);color:var(--text);font-size:.68rem;padding:5px 10px;border-radius:4px;pointer-events:none;display:none;z-index:200;white-space:pre;line-height:1.7;font-family:'Courier New',monospace;min-width:160px}
+.track-map-wrap{margin-top:var(--sp-4);border:1px solid var(--border-sub);border-radius:2px;background:var(--bg-raised);overflow:hidden}
+.tm-lbl{font-size:.56rem;color:var(--n-500);text-transform:uppercase;letter-spacing:1.5px;padding:4px var(--sp-3)}
+#drag-sel{position:absolute;background:rgba(74,154,239,.1);border:1px solid rgba(74,154,239,.35);pointer-events:none;display:none;top:0;bottom:0}
+.x-lbl-row{display:flex;justify-content:space-between;font-size:.56rem;color:var(--n-600);margin-top:3px;padding:0 1px}
+#tele-loading{color:var(--n-400);font-size:.9rem;padding:60px;text-align:center}
+.delta-neg{color:var(--accent-soft)}.delta-pos{color:var(--danger)}
+@media(max-width:768px){.lsb-slip,.lsb-s{display:none}.lap-sum-bar{flex-wrap:nowrap}}
+</style>
+</head>
+<body>
+<div class="tb">
+  <h1>SimTelemetry</h1>
+  <nav class="tb-nav">
+    <a href="/">Live</a><a href="/sessions" class="cur">Sessions</a><a href="/setup">Setup</a>
+    <a href="/admin" id="nav-admin" style="display:none">Admin</a>
+  </nav>
+</div>
+<script>if(location.search.includes('debug=true'))document.getElementById('nav-admin').style.display='';</script>
+<div class="breadcrumb">
+  <a href="/sessions">Sessions</a> &rsaquo;
+  <a href="#" id="bc-game" style="display:none"></a><span id="bc-gsep" style="display:none"> &rsaquo; </span>
+  <a href="#" id="bc-track"></a> &rsaquo;
+  <a href="#" id="bc-sess"></a> &rsaquo;
+  <span>Telemetry</span>
+</div>
+<div class="tele-layout">
+<div class="ctrl-col" id="ctrl-col">
+  <div id="ctrl-loading" style="color:var(--n-400);font-size:.78rem;padding:8px 0">Loading&hellip;</div>
+  <div id="ctrl-inner" style="display:none">
+    <div class="ctrl-section">
+      <div class="ctrl-lbl">Laps (up to 4)</div>
+      <div id="lap-list"></div>
+    </div>
+    <div class="ctrl-section">
+      <div class="ctrl-lbl">Reference</div>
+      <select class="ctrl-sel" id="ref-sel" onchange="onRefChange()">
+        <option value="">None</option>
+        <option value="best_lap" selected>My Best Lap</option>
+        <option value="theoretical">Theoretical Best</option>
+      </select>
+    </div>
+    <div class="ctrl-section">
+      <div class="ctrl-lbl">Channels</div>
+      <div class="ch-grid">
+        <label class="ch-tog"><input type="checkbox" id="ch-speed" checked onchange="renderAll()"> Speed</label>
+        <label class="ch-tog"><input type="checkbox" id="ch-throttle" checked onchange="renderAll()"> Throttle</label>
+        <label class="ch-tog"><input type="checkbox" id="ch-brake" checked onchange="renderAll()"> Brake</label>
+        <label class="ch-tog"><input type="checkbox" id="ch-gear" checked onchange="renderAll()"> Gear</label>
+        <label class="ch-tog"><input type="checkbox" id="ch-steer" onchange="renderAll()"> Steering</label>
+        <label class="ch-tog"><input type="checkbox" id="ch-slip" checked onchange="renderAll()"> Slip</label>
+        <label class="ch-tog"><input type="checkbox" id="ch-tyre" onchange="renderAll()"> Tyres</label>
+      </div>
+    </div>
+    <div class="ctrl-section">
+      <div class="ctrl-lbl">X Axis</div>
+      <div class="xmode-btns">
+        <button class="xmode-btn active" id="xm-dist" onclick="setXMode('distance')">Distance</button>
+        <button class="xmode-btn" id="xm-time" onclick="setXMode('time')">Time</button>
+      </div>
+    </div>
+    <div class="ctrl-section">
+      <button class="btn-reset-zoom" onclick="resetZoom()">Reset Zoom</button>
+    </div>
+  </div>
+</div>
+<div class="panels-col">
+  <div id="tele-loading">Loading telemetry data&hellip;</div>
+  <div id="panels-inner" style="display:none">
+    <div id="sector-hdr" class="sector-hdr"></div>
+    <div id="lap-summaries" class="lap-summaries"></div>
+    <div id="charts-area" style="position:relative">
+      <div id="drag-sel"></div>
+      <div id="panel-delta" class="panel-wrap"></div>
+      <div id="panel-speed" class="panel-wrap"></div>
+      <div id="panel-throttle" class="panel-wrap"></div>
+      <div id="panel-brake" class="panel-wrap"></div>
+      <div id="panel-gear" class="panel-wrap"></div>
+      <div id="panel-steer" class="panel-wrap"></div>
+      <div id="panel-slip" class="panel-wrap"></div>
+      <div id="panel-tyre" class="panel-wrap"></div>
+    </div>
+    <div class="x-lbl-row"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
+    <div class="track-map-wrap" id="track-map-wrap" style="display:none">
+      <div class="tm-lbl">Track Map &mdash; colour = speed (blue slow &rarr; red fast)</div>
+      <div id="track-map-inner"></div>
+    </div>
+  </div>
+</div>
+</div>
+<div id="tele-tip"></div>
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+const _id=new URLSearchParams(location.search).get('id')||'';
+const _sgame=new URLSearchParams(location.search).get('game')||'';
+const _strack=new URLSearchParams(location.search).get('track')||'';
+let _sess=null,_laps=[];
+let _lapSamples={};   // {lapNum: [sample,...]}
+let _refSamples=null,_refMeta=null;
+let _selectedLaps=[];  // ordered, max 4
+let _primaryLap=null;
+let _refType='best_lap';
+let _xMode='distance';
+let _zoom=[0,1];
+let _maxT=1;
+let _dragging=false,_dragX0=0;
+let _tmCx=null,_tmCy=null;
+const LAP_COLORS=['#4a9aef','#22c55e','#f59e0b','#a855f7'];
+const REF_COL='#777777';
+const W=1000;
+const $=id=>document.getElementById(id);
+function fmtLap(s){if(!s)return'—';const m=Math.floor(s/60);return m+':'+(s%60).toFixed(3).padStart(6,'0');}
+function fmtDt(iso){if(!iso)return'—';return new Date(iso).toLocaleString([],{month:'short',day:'numeric',year:'2-digit',hour:'2-digit',minute:'2-digit'});}
+// ── X value of a sample (distance or time-normalised) ────────────────────
+function xv(s){return _xMode==='distance'?s.distance_norm:(s.t/_maxT);}
+// ── Interpolate field at normalised X position ────────────────────────────
+function interpAt(samples,pos,field){
+  if(!samples||!samples.length)return 0;
+  let lo=0,hi=samples.length-1;
+  while(lo<hi-1){const mid=(lo+hi)>>1;if(xv(samples[mid])<=pos)lo=mid;else hi=mid;}
+  const a=samples[lo],b=samples[hi];
+  const dn=xv(b)-xv(a);
+  if(dn<1e-9)return a[field]??0;
+  return (a[field]??0)+((pos-xv(a))/dn)*((b[field]??0)-(a[field]??0));
+}
+// ── Map sample X to SVG x coordinate (applies zoom) ──────────────────────
+function sX(s){return((xv(s)-_zoom[0])/(_zoom[1]-_zoom[0]))*W;}
+function normToSX(pos){return((pos-_zoom[0])/(_zoom[1]-_zoom[0]))*W;}
+// ── Filter samples to zoom window (+margin for clean edges) ──────────────
+function zs(samples){
+  if(!samples)return[];
+  const lo=_zoom[0]-0.002,hi=_zoom[1]+0.002;
+  return samples.filter(s=>{const v=xv(s);return v>=lo&&v<=hi;});
+}
+// ── Auto range helper ─────────────────────────────────────────────────────
+function autoRange(listOfSamples,field,pad=0.06){
+  let mn=Infinity,mx=-Infinity;
+  for(const ss of listOfSamples){for(const s of(ss||[])){const v=s[field];if(v!=null){if(v<mn)mn=v;if(v>mx)mx=v;}}}
+  if(!isFinite(mn)){mn=0;mx=1;}
+  if(mn===mx){mn-=1;mx+=1;}
+  const p=(mx-mn)*pad;return[mn-p,mx+p];
+}
+// ── SVG path builders ─────────────────────────────────────────────────────
+function linePts(samples,field,H,mn,mx){
+  const sl=zs(samples);if(!sl.length)return'';
+  const yr=mx-mn||1;
+  return'M'+sl.map(s=>`${sX(s).toFixed(1)},${(H-((s[field]??mn)-mn)/yr*H).toFixed(1)}`).join('L');
+}
+function fillPts(samples,field,H,mn,mx){
+  const sl=zs(samples);if(!sl.length)return'';
+  const yr=mx-mn||1;
+  const pts=sl.map(s=>`${sX(s).toFixed(1)},${(H-((s[field]??mn)-mn)/yr*H).toFixed(1)}`);
+  const x0=sX(sl[0]).toFixed(1),xN=sX(sl[sl.length-1]).toFixed(1);
+  return'M'+pts.join('L')+`L${xN},${H}L${x0},${H}Z`;
+}
+function stepPts(samples,field,H,mn,mx){
+  const sl=zs(samples);if(!sl.length)return'';
+  const yr=mx-mn||1;
+  let d='';
+  for(let i=0;i<sl.length;i++){
+    const x=sX(sl[i]).toFixed(1);
+    const y=(H-((Math.max(mn,sl[i][field]??mn)-mn)/yr*H)).toFixed(1);
+    d+=i===0?`M${x},${y}`:`H${x}V${y}`;
+  }
+  return d;
+}
+// ── Sector lines helper ───────────────────────────────────────────────────
+function secLine(frac,H){
+  const x=normToSX(frac).toFixed(1);
+  if(x<-10||x>W+10)return'';
+  return`<line x1="${x}" y1="0" x2="${x}" y2="${H}" stroke="#282828" stroke-width="1" stroke-dasharray="4,3"/>`;
+}
+function secLabel(frac,lbl,H){
+  const x=normToSX(frac).toFixed(1);
+  if(x<0||x>W-30)return'';
+  return`<text x="${parseFloat(x)+5}" y="14" fill="#383838" font-size="20" font-family="monospace">${lbl}</text>`;
+}
+// ── Delta builder ─────────────────────────────────────────────────────────
+function buildDelta(lapS,refS,N=500){
+  const out=[];
+  const lo=_zoom[0],hi=_zoom[1];
+  for(let i=0;i<=N;i++){
+    const pos=lo+i/N*(hi-lo);
+    out.push({pos,d:interpAt(lapS,pos,'t')-interpAt(refS,pos,'t')});
+  }
+  return out;
+}
+function deltaSVG(delta,H=44){
+  const zY=H/2;
+  const maxA=Math.max(...delta.map(d=>Math.abs(d.d)),0.001);
+  const sc=(H/2-4)/maxA;
+  const pts=delta.map(d=>({x:normToSX(d.pos).toFixed(1),y:(zY-d.d*sc).toFixed(1)}));
+  let segs=[],cur=null;
+  for(let i=0;i<delta.length;i++){
+    const sg=delta[i].d<0?'g':'r';
+    if(!cur||cur.sg!==sg){if(cur)segs.push(cur);cur={sg,idx:[i]};}
+    else cur.idx.push(i);
+  }
+  if(cur)segs.push(cur);
+  const polys=segs.map(s=>{
+    const fc=s.sg==='g'?'#22c55e':'#ef4444';
+    const tr=s.idx.map(i=>`${pts[i].x},${pts[i].y}`);
+    const cl=[`${pts[s.idx[s.idx.length-1]].x},${zY}`,`${pts[s.idx[0]].x},${zY}`];
+    return`<polygon points="${[...tr,...cl].join(' ')}" fill="${fc}55" stroke="${fc}" stroke-width="1.2" stroke-linejoin="round"/>`;
+  }).join('');
+  return`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" width="100%" height="${H}">
+    <line x1="0" y1="${zY}" x2="${W}" y2="${zY}" stroke="#1e1e1e" stroke-width="1"/>
+    ${secLine(1/3,H)}${secLine(2/3,H)}${polys}
+    ${secLabel(0,'S1',H)}${secLabel(1/3,'S2',H)}${secLabel(2/3,'S3',H)}
+  </svg>`;
+}
+// ── Local minima detection ────────────────────────────────────────────────
+function localMins(samples,field,minDrop=8){
+  const sl=zs(samples);const out=[];
+  for(let i=3;i<sl.length-3;i++){
+    const v=sl[i][field]??0;
+    const ctx=[sl[i-3][field]??0,sl[i-2][field]??0,sl[i-1][field]??0,sl[i+1][field]??0,sl[i+2][field]??0,sl[i+3][field]??0];
+    if(ctx.every(c=>v<=c)&&Math.max(...ctx.slice(0,3))-v>=minDrop)
+      out.push({i,v,x:sX(sl[i]).toFixed(1),y:null});
+  }
+  return out.filter((m,i)=>i===0||(xv(sl[m.i])-xv(sl[out[i-1].i]))>0.04);
+}
+function localMaxes(samples,field,thresh){
+  const sl=zs(samples);const out=[];
+  for(let i=2;i<sl.length-2;i++){
+    const v=sl[i][field]??0;
+    if(v<thresh)continue;
+    if(v>=(sl[i-2][field]??0)&&v>=(sl[i-1][field]??0)&&v>=(sl[i+1][field]??0)&&v>=(sl[i+2][field]??0))
+      out.push({i,v,x:sX(sl[i]).toFixed(1)});
+  }
+  return out.filter((m,i)=>i===0||(xv(sl[m.i])-xv(sl[out[i-1].i]))>0.04);
+}
+// ── Speed to RGB (track map) ──────────────────────────────────────────────
+function spdRgb(v,mn,mx){
+  const t=Math.max(0,Math.min(1,(v-mn)/(mx-mn||1)));
+  return`rgb(${Math.round(t<.5?0:(t-.5)*510)},${Math.round(t<.5?t*360:(1-(t-.5)*2)*360)},${Math.round(t<.5?255-t*510:0)})`;
+}
+// ── Panel builder ─────────────────────────────────────────────────────────
+function setPanel(id,label,svgHtml,show){
+  const p=$(id);
+  if(!show){p.style.display='none';return;}
+  p.style.display='';
+  p.innerHTML=`<div class="panel-lbl-row"><span class="p-lbl">${label}</span></div>
+<div class="panel-svg-wrap" data-panel="${id}"><div class="px-line"></div>${svgHtml}</div>`;
+}
+// ── Individual panel SVG builders ─────────────────────────────────────────
+function speedSVG(){
+  const H=120;
+  const allS=Object.values(_lapSamples).filter(Boolean);
+  let[mn,mx]=autoRange([...allS,_refSamples?_refSamples:[]],'speed_mph');mn=Math.max(0,mn);
+  const yr=mx-mn||1;
+  let c=`${secLine(1/3,H)}${secLine(2/3,H)}${secLabel(0,'S1',H)}${secLabel(1/3,'S2',H)}${secLabel(2/3,'S3',H)}`;
+  if(_refSamples)c+=`<path d="${linePts(_refSamples,'speed_mph',H,mn,mx)}" fill="none" stroke="${REF_COL}" stroke-width="1.5" stroke-dasharray="7,4" opacity=".5"/>`;
+  _selectedLaps.forEach((ln,ci)=>{
+    const s=_lapSamples[ln];if(!s)return;
+    const col=LAP_COLORS[ci],op=ln===_primaryLap?1:.4;
+    c+=`<path d="${linePts(s,'speed_mph',H,mn,mx)}" fill="none" stroke="${col}" stroke-width="${ln===_primaryLap?2:1.5}" opacity="${op}"/>`;
+    if(ln===_primaryLap){
+      const mins=localMins(s,'speed_mph');
+      const sl=zs(s);
+      mins.forEach(m=>{
+        const ss=sl[m.i];if(!ss)return;
+        const x=parseFloat(sX(ss).toFixed(1));
+        const y=H-((ss.speed_mph-mn)/yr*H);
+        c+=`<polygon points="${x},${(y+10).toFixed(1)} ${(x-4).toFixed(1)},${(y+18).toFixed(1)} ${(x+4).toFixed(1)},${(y+18).toFixed(1)}" fill="${col}" opacity=".75"/>
+        <text x="${x}" y="${(y+30).toFixed(1)}" fill="${col}" font-size="17" text-anchor="middle" font-family="monospace" opacity=".8">${Math.round(ss.speed_mph)}</text>`;
+      });
+    }
+  });
+  return`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" width="100%" height="${H}">${c}</svg>`;
+}
+function throttleSVG(){
+  const H=80;
+  const y50=(H-50/100*H).toFixed(1),y70=(H-70/100*H).toFixed(1);
+  let c=`${secLine(1/3,H)}${secLine(2/3,H)}
+    <rect x="0" y="${y70}" width="${W}" height="${(parseFloat(y50)-parseFloat(y70)).toFixed(1)}" fill="#f59e0b0b"/>`;
+  if(_refSamples)c+=`<path d="${linePts(_refSamples,'throttle_pct',H,0,100)}" fill="none" stroke="${REF_COL}" stroke-width="1.5" stroke-dasharray="7,4" opacity=".5"/>`;
+  _selectedLaps.forEach((ln,ci)=>{
+    const s=_lapSamples[ln];if(!s)return;
+    const col=LAP_COLORS[ci],op=ln===_primaryLap?1:.4;
+    if(ln===_primaryLap)c+=`<path d="${fillPts(s,'throttle_pct',H,0,100)}" fill="${col}1a" stroke="none"/>`;
+    c+=`<path d="${linePts(s,'throttle_pct',H,0,100)}" fill="none" stroke="${col}" stroke-width="${ln===_primaryLap?2:1.5}" opacity="${op}"/>`;
+  });
+  return`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" width="100%" height="${H}">${c}</svg>`;
+}
+function brakeSVG(){
+  const H=80;
+  let c=`${secLine(1/3,H)}${secLine(2/3,H)}`;
+  if(_refSamples)c+=`<path d="${linePts(_refSamples,'brake_pct',H,0,100)}" fill="none" stroke="${REF_COL}" stroke-width="1.5" stroke-dasharray="7,4" opacity=".5"/>`;
+  _selectedLaps.forEach((ln,ci)=>{
+    const s=_lapSamples[ln];if(!s)return;
+    const col=LAP_COLORS[ci],op=ln===_primaryLap?1:.4;
+    if(ln===_primaryLap)c+=`<path d="${fillPts(s,'brake_pct',H,0,100)}" fill="#ef44441a" stroke="none"/>`;
+    c+=`<path d="${linePts(s,'brake_pct',H,0,100)}" fill="none" stroke="${col}" stroke-width="${ln===_primaryLap?2:1.5}" opacity="${op}"/>`;
+    if(ln===_primaryLap){
+      const peaks=localMaxes(s,'brake_pct',75);
+      const sl=zs(s);
+      peaks.forEach(pk=>{
+        const ss=sl[pk.i];if(!ss)return;
+        const x=sX(ss).toFixed(1),y=(H-pk.v/100*H).toFixed(1);
+        c+=`<circle cx="${x}" cy="${y}" r="3.5" fill="${col}" opacity=".8"/>`;
+      });
+    }
+  });
+  return`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" width="100%" height="${H}">${c}</svg>`;
+}
+function gearSVG(){
+  const H=60,gM=8;
+  let c=`${secLine(1/3,H)}${secLine(2/3,H)}`;
+  for(let g=1;g<=gM;g++){
+    const y1=(H-(g/gM)*H).toFixed(1),y2=(H-((g-1)/gM)*H).toFixed(1);
+    if(g%2===0)c+=`<rect x="0" y="${y1}" width="${W}" height="${(parseFloat(y2)-parseFloat(y1)).toFixed(1)}" fill="#ffffff03"/>`;
+  }
+  _selectedLaps.forEach((ln,ci)=>{
+    const s=_lapSamples[ln];if(!s)return;
+    const col=LAP_COLORS[ci],op=ln===_primaryLap?.9:.3;
+    c+=`<path d="${stepPts(s,'gear',H,0,gM)}" fill="none" stroke="${col}" stroke-width="${ln===_primaryLap?2:1.5}" opacity="${op}" stroke-linejoin="miter"/>`;
+  });
+  for(let g=1;g<=gM;g++)c+=`<text x="5" y="${(H-((g-.5)/gM)*H+5).toFixed(1)}" fill="#2a2a2a" font-size="17" font-family="monospace">${g}</text>`;
+  return`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" width="100%" height="${H}">${c}</svg>`;
+}
+function steerSVG(){
+  const H=60;
+  const allS=Object.values(_lapSamples).filter(Boolean);
+  const[mn,mx]=autoRange(allS,'steer');
+  const zeroY=(H-((0-mn)/(mx-mn||1))*H).toFixed(1);
+  let c=`<line x1="0" y1="${zeroY}" x2="${W}" y2="${zeroY}" stroke="#1e1e1e" stroke-width="1"/>
+    ${secLine(1/3,H)}${secLine(2/3,H)}`;
+  _selectedLaps.forEach((ln,ci)=>{
+    const s=_lapSamples[ln];if(!s)return;
+    const col=LAP_COLORS[ci],op=ln===_primaryLap?.9:.3;
+    c+=`<path d="${linePts(s,'steer',H,mn,mx)}" fill="none" stroke="${col}" stroke-width="${ln===_primaryLap?1.5:1}" opacity="${op}"/>`;
+  });
+  return`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" width="100%" height="${H}">${c}</svg>`;
+}
+function slipSVG(){
+  const H=100,mx=1;
+  const y10=(H-0.1*H).toFixed(1),y30=(H-0.3*H).toFixed(1);
+  let c=`<rect x="0" y="0" width="${W}" height="${y30}" fill="#ef44440a"/>
+    <rect x="0" y="${y30}" width="${W}" height="${(parseFloat(y10)-parseFloat(y30)).toFixed(1)}" fill="#f59e0b0a"/>
+    <rect x="0" y="${y10}" width="${W}" height="${(H-parseFloat(y10)).toFixed(1)}" fill="#22c55e0a"/>
+    <line x1="0" y1="${y10}" x2="${W}" y2="${y10}" stroke="#22c55e1a" stroke-width="1"/>
+    <line x1="0" y1="${y30}" x2="${W}" y2="${y30}" stroke="#f59e0b1a" stroke-width="1"/>
+    ${secLine(1/3,H)}${secLine(2/3,H)}
+    <text x="6" y="${H-4}" fill="#22c55e33" font-size="16" font-family="monospace">Optimal</text>
+    <text x="6" y="${(parseFloat(y10)-5).toFixed(1)}" fill="#f59e0b33" font-size="16" font-family="monospace">Managed</text>
+    <text x="6" y="${(parseFloat(y30)-5).toFixed(1)}" fill="#ef444433" font-size="16" font-family="monospace">Excess</text>`;
+  _selectedLaps.forEach((ln,ci)=>{
+    const s=_lapSamples[ln];if(!s)return;
+    const col=LAP_COLORS[ci],op=ln===_primaryLap?1:.35;
+    c+=`<path d="${linePts(s,'slip_rl',H,0,mx)}" fill="none" stroke="${col}" stroke-width="${ln===_primaryLap?2:1.5}" opacity="${op}"/>`;
+    c+=`<path d="${linePts(s,'slip_rr',H,0,mx)}" fill="none" stroke="${col}" stroke-width="${ln===_primaryLap?1.5:1}" stroke-dasharray="5,3" opacity="${op*.7}"/>`;
+  });
+  return`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" width="100%" height="${H}">${c}</svg>`;
+}
+function tyreSVG(){
+  const allS=Object.values(_lapSamples).filter(Boolean);
+  const hasTyre=allS.some(ss=>ss.some(s=>s.tyre_fl!=null));
+  if(!hasTyre)return null;
+  const H=80;
+  let[mn,mx]=autoRange(allS,'tyre_fl');
+  if(!isFinite(mn)||mx-mn<20){mn=Math.min(isFinite(mn)?mn:160,160);mx=Math.max(isFinite(mx)?mx:220,220);}
+  const yr=mx-mn||1;
+  const yOL=(H-((180-mn)/yr*H)).toFixed(1),yOH=(H-((200-mn)/yr*H)).toFixed(1);
+  let c=`<rect x="0" y="${yOH}" width="${W}" height="${(parseFloat(yOL)-parseFloat(yOH)).toFixed(1)}" fill="#22c55e0a"/>
+    <line x1="0" y1="${yOH}" x2="${W}" y2="${yOH}" stroke="#22c55e1a" stroke-width="1"/>
+    <line x1="0" y1="${yOL}" x2="${W}" y2="${yOL}" stroke="#22c55e1a" stroke-width="1"/>
+    ${secLine(1/3,H)}${secLine(2/3,H)}`;
+  const tCols=['#ef4444','#4a9aef','#f59e0b','#22c55e'];
+  const corners=['fl','fr','rl','rr'];
+  _selectedLaps.forEach((ln,ci)=>{
+    const s=_lapSamples[ln];if(!s)return;
+    const op=ln===_primaryLap?1:.35;
+    corners.forEach((cr,ti)=>{
+      const p=linePts(s,`tyre_${cr}`,H,mn,mx);
+      if(p)c+=`<path d="${p}" fill="none" stroke="${tCols[ti]}" stroke-width="1.5" opacity="${op}"/>`;
+    });
+  });
+  return`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" width="100%" height="${H}">${c}</svg>`;
+}
+// ── Sector time helper ─────────────────────────────────────────────────────
+function secTime(samples,lo,hi){
+  if(!samples||!samples.length)return null;
+  const tLo=lo<=0?samples[0].t:interpAt(samples,lo,'t');
+  const tHi=hi>=1?samples[samples.length-1].t:interpAt(samples,hi,'t');
+  const dt=tHi-tLo;return dt>0?dt:null;
+}
+// ── Sector header ─────────────────────────────────────────────────────────
+function renderSectorHdr(){
+  const laps=[..._selectedLaps.map(ln=>({ln,s:_lapSamples[ln],col:LAP_COLORS[_selectedLaps.indexOf(ln)],lbl:'L'+ln}))];
+  if(_refSamples)laps.push({ln:'ref',s:_refSamples,col:REF_COL,lbl:'Ref'});
+  const secs=[[0,1/3,'S1'],[1/3,2/3,'S2'],[2/3,1,'S3']];
+  const times=secs.map(([lo,hi,nm])=>{
+    const ts=laps.map(l=>secTime(l.s,lo,hi));
+    const best=Math.min(...ts.filter(t=>t!=null));
+    return{nm,ts,best};
+  });
+  let html=`<div class="s-hdr-row"><span class="s-row-lbl"></span>`;
+  laps.forEach(l=>html+=`<span class="s-cell-hd" style="color:${l.col}">${l.lbl}</span>`);
+  html+='</div>';
+  times.forEach(({nm,ts,best})=>{
+    html+=`<div class="s-hdr-row"><span class="s-row-lbl">${nm}</span>`;
+    ts.forEach((t,i)=>{
+      const isBest=t!=null&&Math.abs(t-best)<0.001;
+      html+=`<span class="s-cell${isBest?' best':''}" style="color:${laps[i].col}">${t!=null?t.toFixed(3):'—'}</span>`;
+    });
+    html+='</div>';
+  });
+  $('sector-hdr').innerHTML=html;
+}
+// ── Lap summary bars ──────────────────────────────────────────────────────
+function renderLapSummaries(){
+  let html='';
+  _selectedLaps.forEach((ln,ci)=>{
+    const s=_lapSamples[ln];
+    const lap=_laps.find(l=>l.lap_number===ln)||{};
+    const col=LAP_COLORS[ci];
+    const s1=secTime(s,0,1/3),s2=secTime(s,1/3,2/3),s3=secTime(s,2/3,1);
+    let dHtml='';
+    if(_refSamples&&s){
+      const delta=interpAt(s,1,'t')-interpAt(_refSamples,1,'t');
+      const sign=delta<0?'−':'+';
+      dHtml=`<span class="lsb-d ${delta<0?'delta-neg':'delta-pos'}">${sign}${Math.abs(delta).toFixed(3)}s ${delta<0?'▲':'▼'}</span>`;
+    }
+    let slipHtml='';
+    if(s){
+      const slips=s.map(ss=>Math.max(ss.slip_rl??0,ss.slip_rr??0));
+      if(slips.length){
+        const avg=slips.reduce((a,b)=>a+b,0)/slips.length;
+        const peak=Math.max(...slips);
+        const pct=slips.filter(v=>v>0.1).length/slips.length*100;
+        slipHtml=`Sl avg:${avg.toFixed(3)} pk:${peak.toFixed(3)} &gt;0.1:${pct.toFixed(1)}%`;
+      }
+    }
+    html+=`<div class="lap-sum-bar" style="border-color:${col}">
+      <span class="lsb-l" style="color:${col}">LAP ${ln}</span>
+      <span class="lsb-t" style="color:${col}">${fmtLap(lap.lap_time_s)}</span>
+      <span class="lsb-s">S1 ${s1!=null?s1.toFixed(3):'—'} &nbsp;S2 ${s2!=null?s2.toFixed(3):'—'} &nbsp;S3 ${s3!=null?s3.toFixed(3):'—'}</span>
+      ${dHtml}<span class="lsb-slip">${slipHtml}</span>
+    </div>`;
+  });
+  $('lap-summaries').innerHTML=html;
+}
+// ── Track map ─────────────────────────────────────────────────────────────
+function renderTrackMap(){
+  const s=_lapSamples[_primaryLap];
+  if(!s||!s.some(ss=>ss.px!=null)){$('track-map-wrap').style.display='none';return;}
+  $('track-map-wrap').style.display='';
+  const hasPz=s.some(ss=>ss.pz!=null);
+  const xz=hasPz?ss=>ss.pz:ss=>ss.py??0;
+  const xs=s.map(ss=>ss.px),zs2=s.map(xz);
+  const spds=s.map(ss=>ss.speed_mph??0);
+  const mnX=Math.min(...xs),mxX=Math.max(...xs);
+  const mnZ=Math.min(...zs2),mxZ=Math.max(...zs2);
+  const mnS=Math.min(...spds),mxS=Math.max(...spds);
+  const TW=900,TH=260,pd=24;
+  const scX=(mxX-mnX)||1,scZ=(mxZ-mnZ)||1;
+  const sc=Math.min((TW-pd*2)/scX,(TH-pd*2)/scZ);
+  const offX=(TW-(mxX-mnX)*sc)/2,offZ=(TH-(mxZ-mnZ)*sc)/2;
+  const cx=x=>offX+(x-mnX)*sc;
+  const cy=z=>TH-offZ-(z-mnZ)*sc;
+  _tmCx=cx;_tmCy=cy;_tmHasPz=hasPz;_tmSamples=s;
+  let segs='';
+  for(let i=1;i<s.length;i++){
+    const x1=cx(s[i-1].px).toFixed(1),y1=cy(xz(s[i-1])).toFixed(1);
+    const x2=cx(s[i].px).toFixed(1),y2=cy(xz(s[i])).toFixed(1);
+    segs+=`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${spdRgb(spds[i],mnS,mxS)}" stroke-width="3" stroke-linecap="round"/>`;
+  }
+  const ix=cx(s[0].px).toFixed(1),iy=cy(xz(s[0])).toFixed(1);
+  $('track-map-inner').innerHTML=`<svg viewBox="0 0 ${TW} ${TH}" width="100%" style="max-height:260px;display:block">
+    ${segs}
+    <circle id="tmap-dot" cx="${ix}" cy="${iy}" r="7" fill="#fff" stroke="rgba(0,0,0,.6)" stroke-width="1.5" opacity=".9"/>
+  </svg>`;
+}
+let _tmHasPz=false,_tmSamples=null;
+function updateTrackDot(pos){
+  const dot=$('tmap-dot');
+  if(!dot||!_tmCx||!_tmSamples)return;
+  const idx=Math.min(_tmSamples.length-1,Math.max(0,Math.round(pos*(_tmSamples.length-1))));
+  const ss=_tmSamples[idx];
+  if(ss&&ss.px!=null){
+    const z=_tmHasPz?(ss.pz??0):(ss.py??0);
+    dot.setAttribute('cx',_tmCx(ss.px).toFixed(1));
+    dot.setAttribute('cy',_tmCy(z).toFixed(1));
+  }
+}
+// ── Main render ───────────────────────────────────────────────────────────
+function renderAll(){
+  if(!_primaryLap||!_lapSamples[_primaryLap])return;
+  let deltaHtml='';
+  if(_refSamples&&_lapSamples[_primaryLap]){
+    deltaHtml=deltaSVG(buildDelta(_lapSamples[_primaryLap],_refSamples));
+  }else{
+    deltaHtml=`<svg viewBox="0 0 ${W} 44" preserveAspectRatio="none" width="100%" height="44">
+      <text x="${W/2}" y="27" text-anchor="middle" fill="#282828" font-size="22" font-family="monospace">Select a reference to see delta</text></svg>`;
+  }
+  setPanel('panel-delta','DELTA — cumulative time vs reference  (green=faster · red=slower)',deltaHtml,true);
+  setPanel('panel-speed','SPEED mph — ▽ corner minimum speed',speedSVG(),$('ch-speed').checked);
+  setPanel('panel-throttle','THROTTLE % — amber band = 50-70% dwell zone',throttleSVG(),$('ch-throttle').checked);
+  setPanel('panel-brake','BRAKE % — ● peak points',brakeSVG(),$('ch-brake').checked);
+  setPanel('panel-gear','GEAR',gearSVG(),$('ch-gear').checked);
+  setPanel('panel-steer','STEERING',steerSVG(),$('ch-steer').checked);
+  setPanel('panel-slip','SLIP RL (solid) / RR (dashed)',slipSVG(),$('ch-slip').checked);
+  const tSVG=tyreSVG();
+  setPanel('panel-tyre','TYRE TEMPS °F — green band = optimal 180-200°F',tSVG||'',$('ch-tyre').checked&&!!tSVG);
+  renderSectorHdr();
+  renderLapSummaries();
+  renderTrackMap();
+  setupInteraction();
+}
+// ── Crosshair, tooltip, zoom ───────────────────────────────────────────────
+function setupInteraction(){
+  const area=$('charts-area');
+  const tip=$('tele-tip');
+  area.onmousemove=e=>{
+    const wrap=e.target.closest('.panel-svg-wrap');
+    if(!wrap){hideX();return;}
+    const rect=wrap.getBoundingClientRect();
+    const xFrac=Math.max(0,Math.min(1,(e.clientX-rect.left)/rect.width));
+    // Crosshair lines
+    area.querySelectorAll('.px-line').forEach(l=>{l.style.left=(xFrac*100)+'%';l.style.display='';});
+    // Normalised data position
+    const pos=_zoom[0]+xFrac*(_zoom[1]-_zoom[0]);
+    updateTrackDot(pos);
+    // Tooltip
+    const lines=[];
+    _selectedLaps.forEach((ln,ci)=>{
+      const s=_lapSamples[ln];if(!s)return;
+      const col=LAP_COLORS[ci];
+      const sp=(interpAt(s,pos,'speed_mph')||0).toFixed(0);
+      const th=(interpAt(s,pos,'throttle_pct')||0).toFixed(0);
+      const br=(interpAt(s,pos,'brake_pct')||0).toFixed(0);
+      const sl=(interpAt(s,pos,'slip_rl')||0).toFixed(3);
+      const g=Math.round(interpAt(s,pos,'gear'));
+      lines.push(`L${ln}  ${sp}mph  G${g}  T${th}%  B${br}%  Sl${sl}`);
+    });
+    if(_refSamples&&_lapSamples[_primaryLap]){
+      const d=interpAt(_lapSamples[_primaryLap],pos,'t')-interpAt(_refSamples,pos,'t');
+      const sign=d<0?'−':'+';
+      lines.push(`Δ ${sign}${Math.abs(d).toFixed(3)}s  @${(pos*100).toFixed(1)}%`);
+    }
+    tip.textContent=lines.join('\n');
+    tip.style.left=Math.min(e.clientX+14,window.innerWidth-180)+'px';
+    tip.style.top=Math.max(8,e.clientY-tip.offsetHeight-8)+'px';
+    tip.style.display='';
+    if(_dragging){
+      const aRect=area.getBoundingClientRect();
+      const x1=e.clientX-aRect.left;
+      const sel=$('drag-sel');
+      sel.style.left=Math.min(_dragX0,x1)+'px';
+      sel.style.width=Math.abs(x1-_dragX0)+'px';
+      sel.style.display='';
+    }
+  };
+  area.onmouseleave=hideX;
+  area.onmousedown=e=>{
+    if(!e.target.closest('.panel-svg-wrap'))return;
+    _dragging=true;_dragX0=e.clientX-area.getBoundingClientRect().left;
+  };
+  area.onmouseup=e=>{
+    if(!_dragging)return;_dragging=false;
+    const aRect=area.getBoundingClientRect();
+    const w=aRect.width;
+    const f0=Math.max(0,Math.min(1,_dragX0/w));
+    const f1=Math.max(0,Math.min(1,(e.clientX-aRect.left)/w));
+    $('drag-sel').style.display='none';
+    const lo=_zoom[0],hi=_zoom[1],range=hi-lo;
+    const nLo=lo+Math.min(f0,f1)*range,nHi=lo+Math.max(f0,f1)*range;
+    if(nHi-nLo>0.01){_zoom=[nLo,nHi];renderAll();}
+  };
+}
+function hideX(){
+  document.querySelectorAll('.px-line').forEach(l=>l.style.display='none');
+  $('tele-tip').style.display='none';
+}
+function resetZoom(){_zoom=[0,1];renderAll();}
+function setXMode(m){
+  _xMode=m;
+  $('xm-dist').classList.toggle('active',m==='distance');
+  $('xm-time').classList.toggle('active',m==='time');
+  renderAll();
+}
+// ── Lap selector ──────────────────────────────────────────────────────────
+function renderLapList(){
+  const best=_sess.best_lap_time_s;
+  $('lap-list').innerHTML=_laps.filter(l=>l.lap_time_s).map(l=>{
+    const ci=_selectedLaps.indexOf(l.lap_number);
+    const checked=ci>=0;
+    const col=checked?LAP_COLORS[ci]:'#444';
+    const isBest=best&&Math.abs(l.lap_time_s-best)<0.001;
+    return`<label class="lap-item">
+      <input type="checkbox" ${checked?'checked':''} onchange="onLapToggle(${l.lap_number},this.checked)">
+      <span class="lap-swatch" style="background:${col}"></span>
+      Lap ${l.lap_number}${isBest?' <span class="lap-best-badge">★</span>':''}
+      <span class="lap-time-s">${fmtLap(l.lap_time_s)}</span>
+    </label>`;
+  }).join('');
+}
+async function onLapToggle(lapN,checked){
+  if(checked){
+    if(_selectedLaps.length>=4)_selectedLaps.shift();
+    _selectedLaps.push(lapN);
+    if(!_lapSamples[lapN])await fetchLap(lapN);
+  }else{
+    _selectedLaps=_selectedLaps.filter(n=>n!==lapN);
+  }
+  _primaryLap=_selectedLaps[0]||null;
+  updateMaxT();renderLapList();renderAll();
+}
+async function onRefChange(){
+  _refType=$('ref-sel').value;
+  _refSamples=null;
+  if(_refType)await fetchRef();
+  renderAll();
+}
+// ── Data fetching ─────────────────────────────────────────────────────────
+async function fetchLap(lapN){
+  try{
+    const d=await fetch('/sessions/lap-samples?session_id='+encodeURIComponent(_id)+'&lap='+lapN).then(r=>r.json());
+    _lapSamples[lapN]=Array.isArray(d)&&d.length?d:[];
+  }catch(e){_lapSamples[lapN]=[];}
+}
+async function fetchRef(){
+  if(!_refType||!_sess){_refSamples=null;return;}
+  try{
+    const d=await fetch('/sessions/reference-samples?track='+encodeURIComponent(_sess.track||'')+'&type='+_refType).then(r=>r.json());
+    _refSamples=Array.isArray(d)&&d.length?d:null;
+  }catch(e){_refSamples=null;}
+}
+function updateMaxT(){
+  _maxT=0;
+  for(const s of Object.values(_lapSamples)){if(s&&s.length){const t=s[s.length-1].t||0;if(t>_maxT)_maxT=t;}}
+  if(_refSamples&&_refSamples.length){const t=_refSamples[_refSamples.length-1].t||0;if(t>_maxT)_maxT=t;}
+  if(!_maxT)_maxT=1;
+}
+// ── Init ──────────────────────────────────────────────────────────────────
+async function init(){
+  if(!_id){location.href='/sessions';return;}
+  let d;
+  try{d=await fetch('/sessions/session/data?id='+encodeURIComponent(_id)).then(r=>r.json());}
+  catch(e){$('tele-loading').textContent='Session not found';return;}
+  _sess=d.session;_laps=d.laps||[];
+  // Breadcrumb
+  const track=(_sess.track&&_sess.track!=='unknown')?_sess.track:(_strack||'Unknown');
+  const game=_sgame||_sess.game||'';
+  const GL={'forza_motorsport':'Forza','acc':'ACC','f1':'F1'};
+  document.title='SimTelemetry · '+track+' Telemetry';
+  if(game){const b=$('bc-game');b.textContent=GL[game]||game;b.href='/sessions/game?name='+encodeURIComponent(game);b.style.display='';$('bc-gsep').style.display='';}
+  $('bc-track').textContent=track;
+  $('bc-track').href='/sessions/track?name='+encodeURIComponent(track)+(game?'&game='+encodeURIComponent(game):'');
+  $('bc-sess').textContent=fmtDt(_sess.started_at);
+  let sessHref='/sessions/session?id='+encodeURIComponent(_id);
+  if(game)sessHref+='&game='+encodeURIComponent(game);
+  if(track)sessHref+='&track='+encodeURIComponent(track);
+  $('bc-sess').href=sessHref;
+  // Best lap default
+  const best=_sess.best_lap_time_s;
+  const bestLap=_laps.find(l=>best&&Math.abs(l.lap_time_s-best)<0.001)||_laps[0];
+  if(bestLap){
+    _selectedLaps=[bestLap.lap_number];
+    _primaryLap=bestLap.lap_number;
+    await fetchLap(bestLap.lap_number);
+  }
+  // Reference metadata
+  try{
+    _refMeta=await fetch('/sessions/references?track='+encodeURIComponent(_sess.track||'')+'&game='+encodeURIComponent(_sess.game||'')).then(r=>r.json());
+    if(_refMeta.best_lap&&$('ref-sel').options[1])$('ref-sel').options[1].text='My Best — '+fmtLap(_refMeta.best_lap.lap_time_s);
+    if(_refMeta.theoretical&&$('ref-sel').options[2])$('ref-sel').options[2].text='Theoretical — '+fmtLap(_refMeta.theoretical.theoretical_best_s);
+  }catch(e){}
+  await fetchRef();
+  updateMaxT();
+  $('tele-loading').style.display='none';
+  $('ctrl-loading').style.display='none';
+  $('panels-inner').style.display='';
+  $('ctrl-inner').style.display='';
+  renderLapList();
+  renderAll();
+}
+init();
+</script>
+</body>
+</html>
+"""
+
 SESSION_DETAIL_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2742,6 +3489,7 @@ tr.best-row td:first-child{color:var(--accent-bd2)}
   <div class="hdr-stat"><div class="v" id="hdr-best">&mdash;</div><div class="l">Best Lap</div></div>
   <div class="hdr-stat"><div class="v" id="hdr-laps">&mdash;</div><div class="l">Laps</div></div>
   <span class="type-chip" id="hdr-type" style="display:none"></span>
+  <a id="tele-link" href="#" style="font-size:.72rem;color:var(--accent-bd2);border:1px solid var(--accent-bd);padding:4px 12px;border-radius:3px;letter-spacing:.5px;display:none">Telemetry &rarr;</a>
 </div>
 <div class="section">
   <div class="section-lbl">Lap Times</div>
@@ -2836,6 +3584,12 @@ function renderHeader(){
   document.getElementById('hdr-best').textContent=fmtLap(s.best_lap_time_s);
   document.getElementById('hdr-laps').textContent=_laps.length;
   if(s.race_type){const el=document.getElementById('hdr-type');el.textContent=TYPE_LABELS[s.race_type]||s.race_type;el.style.display='';}
+  const teleLink=document.getElementById('tele-link');
+  let teleHref='/sessions/telemetry?id='+encodeURIComponent(_id);
+  if(game)teleHref+='&game='+encodeURIComponent(game);
+  const track=s.track&&s.track!=='unknown'?s.track:(_strack||'');
+  if(track)teleHref+='&track='+encodeURIComponent(track);
+  teleLink.href=teleHref;teleLink.style.display='';
 }
 function renderLaps(){
   const best=_sess.best_lap_time_s;
@@ -4020,6 +4774,9 @@ async def handle_status(reader, writer):
 
         elif path == "/sessions/session":
             writer.write(_http_response("200 OK", "text/html", SESSION_DETAIL_HTML.encode()))
+
+        elif path == "/sessions/telemetry":
+            writer.write(_http_response("200 OK", "text/html", TELEMETRY_HTML.encode()))
 
         elif path == "/sessions/data":
             result = _db_sessions_list(100)
