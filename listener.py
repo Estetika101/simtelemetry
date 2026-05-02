@@ -277,9 +277,35 @@ def parse_forza(data: bytes) -> Optional[dict]:
 
 ACC_PHYSICS_SIZE = 328  # v1.7+ physics packet size
 
+_ACC_SESSION_TYPES = {
+    0: "unknown", 1: "practice", 2: "qualifying", 3: "qualifying",
+    4: "race", 5: "time_trial", 6: "time_trial",
+    7: "unknown", 8: "unknown", 9: "practice", 10: "qualifying",
+}
+
 def parse_acc(data: bytes) -> Optional[dict]:
-    """Parse ACC physics packet (full field set)."""
+    """Parse ACC physics or graphics packet; route by value heuristic."""
     if len(data) < 100:
+        return None
+    try:
+        # Discriminate physics vs graphics:
+        # offset 4 = gas (float) in physics — nonzero float >> 3 as uint
+        # offset 4 = status (int 0-3) in graphics
+        # offset 8 = brake (float) in physics — 0 when not braking
+        # offset 8 = session type (int 0-10) in graphics
+        # Both fields ≤ their physics-float equivalent only when inputs are exactly zero.
+        candidate_status  = struct.unpack_from("<I", data, 4)[0]
+        candidate_session = struct.unpack_from("<I", data, 8)[0]
+        if candidate_status <= 3 and candidate_session <= 10 and len(data) >= 140:
+            # Graphics packet: extract session type and race position
+            session_int  = struct.unpack_from("<i", data, 8)[0]
+            position     = struct.unpack_from("<i", data, 136)[0]
+            return {
+                "_packet_type": "graphics",
+                "session_type": _ACC_SESSION_TYPES.get(session_int, "unknown"),
+                "race_position": position if position > 0 else None,
+            }
+    except struct.error:
         return None
     try:
         o = 0
@@ -394,9 +420,12 @@ def parse_f1(data: bytes) -> Optional[dict]:
                 track_id     = struct.unpack_from("<b", data, base + 5)[0]
                 session_type = struct.unpack_from("<B", data, base + 4)[0]
                 session_types = {
-                    0: "Unknown", 1: "P1", 2: "P2", 3: "P3", 4: "Short P",
-                    5: "Q1", 6: "Q2", 7: "Q3", 8: "Short Q", 9: "OSQ",
-                    10: "R", 11: "R2", 12: "R3", 13: "Time Trial",
+                    0: "unknown",
+                    1: "practice", 2: "practice", 3: "practice", 4: "practice",
+                    5: "qualifying", 6: "qualifying", 7: "qualifying",
+                    8: "qualifying", 9: "qualifying",
+                    10: "race", 11: "race", 12: "race",
+                    13: "time_trial",
                 }
                 _f1_session_meta[session_uid] = {
                     "track":        F1_TRACKS.get(track_id, f"track_{track_id}"),
@@ -617,6 +646,7 @@ class Session:
         self._motion_cache: dict = {}
 
         self.race_type = None  # set post-session via /sessions/update
+        self._race_positions: list[int] = []  # Forza: sampled positions for session type inference
 
         self.last_activity = time.time()  # updated only when driver input is detected
 
@@ -650,6 +680,16 @@ class Session:
             })
             return
 
+        # ACC graphics packet — update session metadata only, not a lap sample
+        if packet_type == "graphics":
+            st = parsed.get("session_type", "unknown")
+            if st and st != "unknown":
+                self.session_type = st
+            rp = parsed.get("race_position")
+            if rp is not None and rp > 0:
+                self._race_positions.append(rp)
+            return
+
         # Merge cached motion into telemetry
         if packet_type == "telemetry" and self._motion_cache:
             parsed = {**parsed, **self._motion_cache}
@@ -662,6 +702,12 @@ class Session:
             self.session_type = parsed["session_type"]
         if "car_ordinal" in parsed and self.car == "unknown":
             self.car = str(parsed["car_ordinal"])
+
+        # Forza: sample race_position for session type inference at close()
+        if self.game in ("forza_motorsport", "forza_horizon_5"):
+            rp = parsed.get("race_position")
+            if rp is not None and rp > 0:
+                self._race_positions.append(rp)
 
         # Forza: lap transitions via lap_number field
         lap_num = parsed.get("lap_number", 0)
@@ -698,6 +744,16 @@ class Session:
         self.current_lap_num = new_lap
         self.current_lap = LapRecord(new_lap)
 
+    def _infer_forza_session_type(self) -> str:
+        positions = self._race_positions
+        if not positions:
+            return "unknown"
+        unique = set(positions)
+        if len(unique) == 1 and next(iter(unique)) == 1:
+            valid_laps = len([l for l in self.completed_laps if l.lap_time_s and l.lap_time_s > 0])
+            return "time_trial" if valid_laps <= 3 else "practice"
+        return "race"
+
     def _is_driving(self, parsed: dict) -> bool:
         return _is_driving(parsed)
 
@@ -728,6 +784,10 @@ class Session:
             }
             for lap in self.completed_laps
         ]
+
+        # Infer Forza session type from position history if not already known
+        if self.game in ("forza_motorsport", "forza_horizon_5") and self.session_type == "unknown":
+            self.session_type = self._infer_forza_session_type()
 
         session_data = {
             "session_id":       self.session_id,
@@ -2515,7 +2575,7 @@ td.date-col{color:var(--text)}
   <div class="empty-state" id="empty" style="display:none">No sessions at this track</div>
 </div>
 <script>
-const TYPE_LABELS={practice:'Practice',time_trial:'Time Trial',qualifying:'Qualifying',race_ai:'Race vs AI',race_online:'Online Race',hot_lap:'Hot Lap'};
+const TYPE_LABELS={practice:'Practice',time_trial:'Time Trial',qualifying:'Qualifying',race:'Race',race_ai:'Race vs AI',race_online:'Online Race',hot_lap:'Hot Lap'};
 function fmtLap(s){if(!s)return '—';const m=Math.floor(s/60);return m+':'+(s%60).toFixed(3).padStart(6,'0');}
 function fmtDt(iso){if(!iso)return '—';return new Date(iso).toLocaleString([],{month:'short',day:'numeric',year:'2-digit',hour:'2-digit',minute:'2-digit'});}
 function spark(times){
@@ -2571,7 +2631,8 @@ function renderTable(){
   const globalBest=allBests.length?Math.min(...allBests):null;
   document.getElementById('sess-tbody').innerHTML=_sessions.map(s=>{
     const isGB=globalBest&&s.best_lap_time_s&&Math.abs(s.best_lap_time_s-globalBest)<0.001;
-    const typeHtml=s.race_type?`<span class="type-chip">${TYPE_LABELS[s.race_type]||s.race_type}</span>`:'';
+    const effType=s.race_type||(s.session_type&&s.session_type!=='unknown'?s.session_type:null);
+    const typeHtml=effType?`<span class="type-chip">${TYPE_LABELS[effType]||effType}</span>`:'';
     return `<tr class="clickable" data-id="${s.session_id}">
       <td class="date-col">${fmtDt(s.started_at)}</td>
       <td>${typeHtml}</td>
@@ -3544,7 +3605,7 @@ tr.best-row td:first-child{color:var(--accent-bd2)}
   </div>
 </div>
 <script>
-const TYPE_LABELS={practice:'Practice',time_trial:'Time Trial',qualifying:'Qualifying',race_ai:'Race vs AI',race_online:'Online Race',hot_lap:'Hot Lap'};
+const TYPE_LABELS={practice:'Practice',time_trial:'Time Trial',qualifying:'Qualifying',race:'Race',race_ai:'Race vs AI',race_online:'Online Race',hot_lap:'Hot Lap'};
 function fmtLap(s){if(!s)return '—';const m=Math.floor(s/60);return m+':'+(s%60).toFixed(3).padStart(6,'0');}
 function fmtDt(iso){if(!iso)return '—';return new Date(iso).toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});}
 function scls(v){return v>0.25?'crit':v>0.12?'warn':'';}
@@ -3584,7 +3645,8 @@ function renderHeader(){
   document.getElementById('hdr-sub').textContent=(s.game||'').replace(/_/g,' ')+' · '+fmtDt(s.started_at);
   document.getElementById('hdr-best').textContent=fmtLap(s.best_lap_time_s);
   document.getElementById('hdr-laps').textContent=_laps.length;
-  if(s.race_type){const el=document.getElementById('hdr-type');el.textContent=TYPE_LABELS[s.race_type]||s.race_type;el.style.display='';}
+  const effType=s.race_type||(s.session_type&&s.session_type!=='unknown'?s.session_type:null);
+  if(effType){const el=document.getElementById('hdr-type');el.textContent=TYPE_LABELS[effType]||effType;el.style.display='';}
   const teleLink=document.getElementById('tele-link');
   let teleHref='/sessions/telemetry?id='+encodeURIComponent(_id);
   if(game)teleHref+='&game='+encodeURIComponent(game);
@@ -4126,7 +4188,7 @@ def _db_track_sessions(track: str, game: Optional[str] = None) -> list:
                 where += " AND game=?"
                 params.append(game)
             rows = conn.execute(f"""
-                SELECT session_id,game,track,car,race_type,
+                SELECT session_id,game,track,car,session_type,race_type,
                        started_at,ended_at,best_lap_time_s,lap_count,
                        ai_analyzed_at,ai_model
                 FROM sessions {where} ORDER BY started_at DESC
@@ -4907,7 +4969,7 @@ async def handle_status(reader, writer):
                 conn = _db_connect()
                 try:
                     sess_row = conn.execute(
-                        "SELECT session_id,game,track,car,race_type,started_at,ended_at,"
+                        "SELECT session_id,game,track,car,session_type,race_type,started_at,ended_at,"
                         "best_lap_time_s,lap_count,ai_analysis,ai_analyzed_at,ai_model "
                         "FROM sessions WHERE session_id=?", (sid,)
                     ).fetchone()
