@@ -558,7 +558,7 @@ class LapRecord:
         speed = parsed.get("speed_mph", 0)
         if speed > self.max_speed:
             self.max_speed = speed
-        self.samples.append({
+        sample = {
             "t":            round(parsed.get("current_lap_time", parsed.get("_t", 0)), 3),
             "speed_mph":    round(parsed.get("speed_mph", 0), 1),
             "throttle_pct": round(parsed.get("throttle_pct", 0), 1),
@@ -571,7 +571,12 @@ class LapRecord:
             "slip_rr":      round(parsed.get("slip_ratio_rr", 0), 4),
             "g_lat":        round(parsed.get("g_lat", 0), 3),
             "g_lon":        round(parsed.get("g_lon", 0), 3),
-        })
+        }
+        if parsed.get("position_x") is not None:
+            sample["px"] = round(parsed["position_x"], 2)
+            sample["py"] = round(parsed["position_y"], 2)
+            sample["pz"] = round(parsed["position_z"], 2)
+        self.samples.append(sample)
 
     def close(self, lap_time_s: Optional[float] = None):
         self.ended_at   = time.time()
@@ -735,6 +740,12 @@ class Session:
         }
 
         _db_write_session(session_data)
+        _store_session_lap_samples(self.session_id, self.completed_laps)
+        threading.Thread(
+            target=_update_track_references_bg,
+            args=(self.track, self.game),
+            daemon=True,
+        ).start()
 
         try:
             sp = storage_path()
@@ -2448,6 +2459,18 @@ td.best-time{color:var(--accent-soft);font-weight:bold}
 td.date-col{color:var(--text)}
 .type-chip{font-size:.65rem;background:var(--accent-bg);border:1px solid var(--accent-bd);color:var(--accent-soft);padding:1px 7px;border-radius:10px;letter-spacing:.5px}
 .empty-state{color:var(--n-500);font-size:.85rem;padding:48px var(--sp-6);text-align:center}
+.ref-card{margin:var(--sp-4) var(--sp-6);border:1px solid var(--surface-bd);border-radius:6px;background:var(--bg-raised);padding:var(--sp-4) var(--sp-5);display:none}
+.ref-card.on{display:block}
+.ref-card-lbl{font-size:.62rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:2px;margin-bottom:var(--sp-3)}
+.ref-rows{display:flex;flex-direction:column;gap:var(--sp-2)}
+.ref-row{display:flex;align-items:baseline;gap:var(--sp-4);flex-wrap:wrap}
+.ref-row-type{font-size:.72rem;color:var(--n-300);text-transform:uppercase;letter-spacing:1px;width:90px;flex-shrink:0}
+.ref-row-time{font-size:1.1rem;font-weight:900;color:var(--text-head);font-variant-numeric:tabular-nums}
+.ref-row-time.green{color:var(--accent-soft)}
+.ref-row-meta{font-size:.7rem;color:var(--n-400)}
+.ref-sectors{font-size:.68rem;color:var(--n-400);margin-top:2px;padding-left:94px}
+.ref-gap{margin-top:var(--sp-3);padding-top:var(--sp-3);border-top:1px solid var(--border-sub);font-size:.75rem;color:var(--n-300);display:flex;align-items:center;gap:var(--sp-3)}
+.ref-gap-val{color:var(--warn);font-weight:bold;font-size:.9rem}
 </style>
 </head>
 <body>
@@ -2471,6 +2494,14 @@ td.date-col{color:var(--text)}
 <div class="track-tip-bar" id="tip-bar">
   <span id="tip-text"></span>
   <button class="tip-gen" id="tip-btn" onclick="generateTip()">Generate AI tip</button>
+</div>
+<div class="ref-card" id="ref-card">
+  <div class="ref-card-lbl" id="ref-card-title">References</div>
+  <div class="ref-rows" id="ref-rows"></div>
+  <div class="ref-gap" id="ref-gap" style="display:none">
+    <span>Gap to theoretical</span>
+    <span class="ref-gap-val" id="ref-gap-val"></span>
+  </div>
 </div>
 <div class="page">
   <table id="sess-table" style="display:none">
@@ -2514,6 +2545,7 @@ async function init(){
   renderHeader();
   renderTable();
   loadTip();
+  loadReferences();
 }
 function renderHeader(){
   document.getElementById('hdr-name').textContent=_track;
@@ -2552,6 +2584,46 @@ function renderTable(){
       location.href=u;
     });
   });
+}
+async function loadReferences(){
+  try{
+    const url='/sessions/references?track='+encodeURIComponent(_track)+(_game?'&game='+encodeURIComponent(_game):'');
+    const d=await fetch(url).then(r=>r.json());
+    if(!d.best_lap&&!d.theoretical)return;
+    const card=document.getElementById('ref-card');
+    const rows=document.getElementById('ref-rows');
+    const title=document.getElementById('ref-card-title');
+    title.textContent=(_track.toUpperCase()||'TRACK')+' References';
+    let html='';
+    if(d.best_lap){
+      const bl=d.best_lap;
+      html+=`<div class="ref-row">
+        <span class="ref-row-type">Best Lap</span>
+        <span class="ref-row-time green">${fmtLap(bl.lap_time_s)}</span>
+        <span class="ref-row-meta">${bl.session_date}&nbsp;&nbsp;Lap ${bl.lap_number}</span>
+      </div>`;
+    }
+    if(d.theoretical){
+      const th=d.theoretical;
+      html+=`<div class="ref-row">
+        <span class="ref-row-type">Theoretical</span>
+        <span class="ref-row-time">${fmtLap(th.theoretical_best_s)}</span>
+        <span class="ref-row-meta"></span>
+      </div>
+      <div class="ref-sectors">S1 ${th.s1_s!=null?th.s1_s.toFixed(3)+'s':'—'} ${th.s1_session_date||''} &nbsp;·&nbsp;
+        S2 ${th.s2_s!=null?th.s2_s.toFixed(3)+'s':'—'} ${th.s2_session_date||''} &nbsp;·&nbsp;
+        S3 ${th.s3_s!=null?th.s3_s.toFixed(3)+'s':'—'} ${th.s3_session_date||''}</div>`;
+      if(d.best_lap&&d.best_lap.lap_time_s&&th.theoretical_best_s){
+        const gap=d.best_lap.lap_time_s-th.theoretical_best_s;
+        if(gap>0.01){
+          document.getElementById('ref-gap-val').textContent='+'+gap.toFixed(3)+'s';
+          document.getElementById('ref-gap').style.display='flex';
+        }
+      }
+    }
+    rows.innerHTML=html;
+    card.classList.add('on');
+  }catch(e){}
 }
 async function loadTip(){
   try{
@@ -2624,6 +2696,24 @@ tr.best-row td:first-child{color:var(--accent-bd2)}
 .ai-meta{font-size:.72rem;color:var(--n-300);margin-left:var(--sp-3)}
 .ai-body{font-size:.85rem;line-height:1.75;color:#ccc;white-space:pre-wrap;margin-top:18px;padding-top:18px;border-top:1px solid #1a1a28;display:none}
 .ai-err{color:var(--danger);font-size:.8rem;margin-top:var(--sp-3);display:none}
+.btn-cmp{background:none;border:1px solid var(--surface-bd);color:var(--text-muted);font-family:inherit;font-size:.7rem;padding:2px 8px;border-radius:3px;cursor:pointer;letter-spacing:.5px;white-space:nowrap}
+.btn-cmp:hover{border-color:var(--n-300);color:var(--text)}
+.cmp-panel{margin:0 var(--sp-6) var(--sp-5);border:1px solid var(--surface-bd);border-radius:6px;background:var(--bg-raised);overflow:hidden}
+.cmp-hdr{display:flex;align-items:center;padding:10px var(--sp-5);border-bottom:1px solid var(--border-sub);gap:var(--sp-3)}
+.cmp-meta{font-size:.76rem;color:var(--n-200);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cmp-close{background:none;border:none;color:var(--n-400);font-size:1rem;cursor:pointer;padding:0 4px;line-height:1}
+.cmp-close:hover{color:var(--text)}
+.cmp-ctrl{display:flex;align-items:center;gap:var(--sp-4);padding:8px var(--sp-5);border-bottom:1px solid var(--border-sub);flex-wrap:wrap}
+.cmp-sel{background:var(--surface);border:1px solid var(--surface-bd);color:var(--text);font-family:inherit;font-size:.78rem;padding:4px 8px;border-radius:4px;max-width:280px}
+.cmp-togg{display:flex;gap:var(--sp-3);margin-left:auto;flex-wrap:wrap}
+.cmp-tog{display:flex;align-items:center;gap:4px;font-size:.72rem;color:var(--n-200);cursor:pointer;user-select:none}
+.cmp-tog input{accent-color:var(--accent);width:11px;height:11px}
+.cmp-charts-wrap{position:relative;padding:var(--sp-3) var(--sp-5) var(--sp-2)}
+.chart-row{margin-bottom:6px}
+.chart-lbl{font-size:.6rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:2px}
+.chart-svg{display:block;width:100%;overflow:visible}
+#cmp-crosshair{position:absolute;top:0;bottom:0;width:1px;background:rgba(255,255,255,.2);pointer-events:none;display:none}
+#cmp-tooltip{position:absolute;top:4px;background:var(--surface);border:1px solid var(--surface-bd);color:var(--text);font-size:.7rem;padding:3px 8px;border-radius:3px;pointer-events:none;display:none;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -2665,6 +2755,7 @@ tr.best-row td:first-child{color:var(--accent-bd2)}
       <th>Avg Slip</th>
       <th>Peak Slip</th>
       <th>Slip&gt;0.1%</th>
+      <th></th>
     </tr></thead>
     <tbody id="lap-tbody"></tbody>
   </table>
@@ -2678,6 +2769,30 @@ tr.best-row td:first-child{color:var(--accent-bd2)}
   </div>
   <div class="ai-body" id="ai-body"></div>
   <div class="ai-err" id="ai-err"></div>
+</div>
+<div class="cmp-panel" id="cmp-panel" style="display:none">
+  <div class="cmp-hdr">
+    <span class="cmp-meta" id="cmp-meta">Loading&hellip;</span>
+    <button class="cmp-close" onclick="closeCompare()" title="Close">&times;</button>
+  </div>
+  <div class="cmp-ctrl">
+    <select class="cmp-sel" id="cmp-lap-sel" onchange="onLapSelChange()"></select>
+    <select class="cmp-sel" id="cmp-ref-sel" onchange="onRefSelChange()"></select>
+    <div class="cmp-togg">
+      <label class="cmp-tog"><input type="checkbox" id="tog-throttle" checked onchange="renderCharts()"> Throttle</label>
+      <label class="cmp-tog"><input type="checkbox" id="tog-brake" checked onchange="renderCharts()"> Brake</label>
+      <label class="cmp-tog"><input type="checkbox" id="tog-speed" checked onchange="renderCharts()"> Speed</label>
+      <label class="cmp-tog"><input type="checkbox" id="tog-slip" checked onchange="renderCharts()"> Slip RL</label>
+    </div>
+  </div>
+  <div class="cmp-charts-wrap" id="cmp-charts-wrap">
+    <div id="cmp-crosshair"></div>
+    <div id="cmp-tooltip"></div>
+    <div id="cmp-charts-inner"></div>
+    <div style="display:flex;justify-content:space-between;font-size:.6rem;color:var(--n-400);margin-top:2px">
+      <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
+    </div>
+  </div>
 </div>
 <script>
 const TYPE_LABELS={practice:'Practice',time_trial:'Time Trial',qualifying:'Qualifying',race_ai:'Race vs AI',race_online:'Online Race',hot_lap:'Hot Lap'};
@@ -2735,6 +2850,7 @@ function renderLaps(){
       <td class="${scls(l.avg_slip||0)}">${l.avg_slip!=null?l.avg_slip.toFixed(4):'—'}</td>
       <td class="${scls(l.peak_slip||0)}">${l.peak_slip!=null?l.peak_slip.toFixed(4):'—'}</td>
       <td>${l.slip_above_pct!=null?l.slip_above_pct.toFixed(1)+'%':'—'}</td>
+      <td><button class="btn-cmp" onclick="openCompare(${l.lap_number})">Compare</button></td>
     </tr>`;
   }).join('');
 }
@@ -2775,6 +2891,213 @@ async function runAnalysis(force){
     rbtn.disabled=false;if(!_sess.ai_analysis)rbtn.style.display='none';
   }
 }
+// ── Lap comparison ────────────────────────────────────────────────────────
+let _cmpLapN=null,_cmpRefType='best_lap',_refs=null;
+let _cmpLapSamples=null,_cmpRefSamples=null;
+
+function interpAt(samples,norm,field){
+  if(!samples||!samples.length)return 0;
+  let lo=0,hi=samples.length-1;
+  while(lo<hi-1){const mid=(lo+hi)>>1;if(samples[mid].distance_norm<=norm)lo=mid;else hi=mid;}
+  const a=samples[lo],b=samples[hi];
+  const dn=b.distance_norm-a.distance_norm;
+  if(dn<1e-9)return a[field]??0;
+  const f=(norm-a.distance_norm)/dn;
+  return (a[field]??0)+f*((b[field]??0)-(a[field]??0));
+}
+
+function buildDelta(lapS,refS,N=400){
+  const out=[];
+  for(let i=0;i<=N;i++){
+    const norm=i/N;
+    out.push({norm,delta:interpAt(lapS,norm,'t')-interpAt(refS,norm,'t')});
+  }
+  return out;
+}
+
+function autoRange(a,b,field,pad=0.08){
+  let mn=Infinity,mx=-Infinity;
+  for(const s of [...a,...b]){const v=s[field]??0;if(v<mn)mn=v;if(v>mx)mx=v;}
+  if(!isFinite(mn)){mn=0;mx=1;}
+  if(mn===mx){mn-=1;mx+=1;}
+  const p=(mx-mn)*pad;
+  return[mn-p,mx+p];
+}
+
+function svgPath(samples,field,W,H,mn,mx){
+  const yr=mx-mn||1;
+  return'M'+samples.map(s=>{
+    const x=(s.distance_norm*W).toFixed(1);
+    const y=(H-((s[field]??mn)-mn)/yr*H).toFixed(1);
+    return x+','+y;
+  }).join('L');
+}
+
+function deltaSVG(delta,W=1000,H=48){
+  const zY=H/2;
+  const maxA=Math.max(...delta.map(d=>Math.abs(d.delta)),0.001);
+  const scale=(H/2-4)/maxA;
+  const pts=delta.map(d=>({x:d.norm*W,y:zY-d.delta*scale}));
+  // Build sign-segmented filled polygons
+  let segs=[],cur=null;
+  for(let i=0;i<pts.length;i++){
+    const sg=delta[i].delta<0?'g':'r';
+    if(!cur||cur.sg!==sg){if(cur)segs.push(cur);cur={sg,idx:[i]};}
+    else cur.idx.push(i);
+  }
+  if(cur)segs.push(cur);
+  const polys=segs.map(s=>{
+    const fc=s.sg==='g'?'#22c55e':'#ef4444';
+    const trace=s.idx.map(i=>`${pts[i].x.toFixed(1)},${pts[i].y.toFixed(1)}`);
+    const close=[`${pts[s.idx[s.idx.length-1]].x.toFixed(1)},${zY}`,`${pts[s.idx[0]].x.toFixed(1)},${zY}`];
+    return `<polygon points="${[...trace,...close].join(' ')}" fill="${fc}44" stroke="${fc}" stroke-width="1.5" stroke-linejoin="round"/>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" width="100%" height="${H}" class="chart-svg">
+    <line x1="0" y1="${zY}" x2="${W}" y2="${zY}" stroke="#333" stroke-width="1"/>
+    ${polys}
+  </svg>`;
+}
+
+function channelSVG(lapS,refS,field,color,W=1000,H=72,mn=null,mx=null,thresh=null){
+  if(mn===null)[mn,mx]=autoRange(lapS,refS,field);
+  const lp=svgPath(lapS,field,W,H,mn,mx);
+  const rp=svgPath(refS,field,W,H,mn,mx);
+  let th='';
+  if(thresh!=null){
+    const ty=(H-((thresh-mn)/(mx-mn||1))*H).toFixed(1);
+    th=`<line x1="0" y1="${ty}" x2="${W}" y2="${ty}" stroke="#555" stroke-width="1" stroke-dasharray="4,4"/>`;
+  }
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" width="100%" height="${H}" class="chart-svg">
+    ${th}
+    <path d="${rp}" fill="none" stroke="${color}" stroke-width="1.5" stroke-dasharray="7,4" opacity=".55"/>
+    <path d="${lp}" fill="none" stroke="${color}" stroke-width="2"/>
+  </svg>`;
+}
+
+function renderCharts(){
+  if(!_cmpLapSamples||!_cmpRefSamples)return;
+  const lapS=_cmpLapSamples,refS=_cmpRefSamples;
+  const delta=buildDelta(lapS,refS);
+  const finalD=delta[delta.length-1].delta;
+  const sign=finalD<0?'−':'+';
+
+  // Meta label
+  const lap=_laps.find(l=>l.lap_number===_cmpLapN)||{};
+  let refLabel=_cmpRefType==='best_lap'?'Best Lap':'Theoretical Best';
+  if(_refs){
+    if(_cmpRefType==='best_lap'&&_refs.best_lap)
+      refLabel=`Best Lap — ${_refs.best_lap.session_date} (${fmtLap(_refs.best_lap.lap_time_s)})`;
+    else if(_cmpRefType==='theoretical'&&_refs.theoretical)
+      refLabel=`Theoretical Best — ${fmtLap(_refs.theoretical.theoretical_best_s)}`;
+  }
+  document.getElementById('cmp-meta').textContent=
+    `Lap ${_cmpLapN} (${fmtLap(lap.lap_time_s)}) vs ${refLabel}  ·  Δ${sign}${Math.abs(finalD).toFixed(3)}s`;
+
+  const rows=[];
+  rows.push(`<div class="chart-row"><div class="chart-lbl">Delta — solid faster · dashed slower</div>${deltaSVG(delta)}</div>`);
+  if(document.getElementById('tog-throttle').checked)
+    rows.push(`<div class="chart-row"><div class="chart-lbl">Throttle %</div>${channelSVG(lapS,refS,'throttle_pct','#22c55e',1000,68,0,100)}</div>`);
+  if(document.getElementById('tog-brake').checked)
+    rows.push(`<div class="chart-row"><div class="chart-lbl">Brake %</div>${channelSVG(lapS,refS,'brake_pct','#ef4444',1000,68,0,100)}</div>`);
+  if(document.getElementById('tog-speed').checked)
+    rows.push(`<div class="chart-row"><div class="chart-lbl">Speed mph</div>${channelSVG(lapS,refS,'speed_mph','#4a9aef',1000,68)}</div>`);
+  if(document.getElementById('tog-slip').checked)
+    rows.push(`<div class="chart-row"><div class="chart-lbl">Slip RL</div>${channelSVG(lapS,refS,'slip_rl','#f59e0b',1000,68,null,null,0.1)}</div>`);
+
+  document.getElementById('cmp-charts-inner').innerHTML=rows.join('');
+  setupCrosshair(delta);
+}
+
+function setupCrosshair(delta){
+  const wrap=document.getElementById('cmp-charts-wrap');
+  const inner=document.getElementById('cmp-charts-inner');
+  const line=document.getElementById('cmp-crosshair');
+  const tip=document.getElementById('cmp-tooltip');
+  // crosshair height = inner content only
+  inner.onmousemove=(e)=>{
+    const rect=inner.getBoundingClientRect();
+    const x=e.clientX-rect.left;
+    const pct=Math.max(0,Math.min(1,x/rect.width));
+    // Position relative to wrap
+    const wrapRect=wrap.getBoundingClientRect();
+    const wx=e.clientX-wrapRect.left;
+    line.style.left=wx+'px';
+    line.style.display='block';
+    const idx=Math.round(pct*(delta.length-1));
+    const d=delta[idx];
+    if(d){
+      const ds=d.delta<0?'−':'+';
+      tip.textContent=`${(pct*100).toFixed(0)}%  Δ${ds}${Math.abs(d.delta).toFixed(3)}s`;
+      tip.style.left=Math.min(wx+10,wrapRect.width-130)+'px';
+      tip.style.display='block';
+    }
+  };
+  inner.onmouseleave=()=>{line.style.display='none';tip.style.display='none';};
+}
+
+async function openCompare(lapN){
+  _cmpLapN=lapN;
+  document.getElementById('cmp-panel').style.display='block';
+  document.getElementById('cmp-meta').textContent='Loading…';
+  document.getElementById('cmp-charts-inner').innerHTML='';
+
+  // Load reference metadata once
+  if(!_refs){
+    try{_refs=await fetch('/sessions/references?track='+encodeURIComponent(_sess.track||'')
+      +'&game='+encodeURIComponent(_sess.game||'')).then(r=>r.json());}
+    catch(e){_refs={};}
+  }
+
+  // Populate selectors
+  const lapSel=document.getElementById('cmp-lap-sel');
+  lapSel.innerHTML=_laps.filter(l=>l.lap_time_s).map(l=>
+    `<option value="${l.lap_number}"${l.lap_number===lapN?' selected':''}>Lap ${l.lap_number} — ${fmtLap(l.lap_time_s)}</option>`
+  ).join('');
+
+  const refSel=document.getElementById('cmp-ref-sel');
+  refSel.innerHTML='';
+  if(_refs.best_lap)
+    refSel.innerHTML+=`<option value="best_lap">Best Lap — ${_refs.best_lap.session_date} (${fmtLap(_refs.best_lap.lap_time_s)})</option>`;
+  if(_refs.theoretical)
+    refSel.innerHTML+=`<option value="theoretical">Theoretical Best — ${fmtLap(_refs.theoretical.theoretical_best_s)}</option>`;
+  if(!refSel.options.length)
+    refSel.innerHTML='<option value="">No reference data yet</option>';
+  _cmpRefType=refSel.value||'best_lap';
+
+  await _loadAndRender();
+  document.getElementById('cmp-panel').scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+async function _loadAndRender(){
+  _cmpLapSamples=null;_cmpRefSamples=null;
+  const inner=document.getElementById('cmp-charts-inner');
+  inner.innerHTML='<div style="color:var(--n-400);padding:20px;text-align:center">Loading samples…</div>';
+  const [lapD,refD]=await Promise.all([
+    fetch('/sessions/lap-samples?session_id='+encodeURIComponent(_id)+'&lap='+_cmpLapN).then(r=>r.json()).catch(()=>null),
+    _cmpRefType?fetch('/sessions/reference-samples?track='+encodeURIComponent(_sess.track||'')+'&type='+_cmpRefType).then(r=>r.json()).catch(()=>null):null,
+  ]);
+  if(!lapD||!lapD.length){
+    inner.innerHTML='<div style="color:var(--n-400);padding:20px;text-align:center">No sample data for this lap — samples are only stored for laps within 102% of session best.</div>';
+    return;
+  }
+  if(!refD||!refD.length){
+    inner.innerHTML='<div style="color:var(--n-400);padding:20px;text-align:center">No reference data for this track yet. Close more sessions at this track to build references.</div>';
+    return;
+  }
+  _cmpLapSamples=lapD;_cmpRefSamples=refD;
+  renderCharts();
+}
+
+async function onLapSelChange(){
+  _cmpLapN=parseInt(document.getElementById('cmp-lap-sel').value);
+  await _loadAndRender();
+}
+async function onRefSelChange(){
+  _cmpRefType=document.getElementById('cmp-ref-sel').value;
+  await _loadAndRender();
+}
+function closeCompare(){document.getElementById('cmp-panel').style.display='none';}
+// ── End lap comparison ─────────────────────────────────────────────────────
 init();
 </script>
 </body>
@@ -2829,9 +3152,38 @@ def _db_init():
                     generated_at TEXT,
                     model        TEXT
                 );
+                CREATE TABLE IF NOT EXISTS track_references (
+                    track                      TEXT NOT NULL,
+                    reference_type             TEXT NOT NULL,
+                    session_id                 TEXT,
+                    lap_number                 INTEGER,
+                    samples_json               TEXT NOT NULL,
+                    theoretical_s1_s           REAL,
+                    theoretical_s1_session_id  TEXT,
+                    theoretical_s1_lap         INTEGER,
+                    theoretical_s2_s           REAL,
+                    theoretical_s2_session_id  TEXT,
+                    theoretical_s2_lap         INTEGER,
+                    theoretical_s3_s           REAL,
+                    theoretical_s3_session_id  TEXT,
+                    theoretical_s3_lap         INTEGER,
+                    theoretical_best_s         REAL,
+                    updated_at                 TEXT,
+                    PRIMARY KEY (track, reference_type)
+                );
+                CREATE TABLE IF NOT EXISTS lap_samples (
+                    session_id    TEXT NOT NULL,
+                    lap_number    INTEGER NOT NULL,
+                    samples_json  TEXT NOT NULL,
+                    distance_m_json TEXT NOT NULL,
+                    created_at    TEXT,
+                    PRIMARY KEY (session_id, lap_number)
+                );
                 CREATE INDEX IF NOT EXISTS idx_laps_session  ON laps(session_id);
                 CREATE INDEX IF NOT EXISTS idx_sessions_track ON sessions(track);
                 CREATE INDEX IF NOT EXISTS idx_sessions_start ON sessions(started_at);
+                CREATE INDEX IF NOT EXISTS idx_lap_samples_session ON lap_samples(session_id);
+                CREATE INDEX IF NOT EXISTS idx_track_refs_track ON track_references(track);
             """)
             conn.commit()
         finally:
@@ -3129,6 +3481,322 @@ def _db_save_ai_analysis(sid: str, analysis: str, model: str):
                        ai_analysis=analysis,
                        ai_analyzed_at=datetime.now().isoformat(),
                        ai_model=model)
+
+# ─── Lap Normalization & Reference Storage ────────────────────────────────────
+
+import math as _math
+
+_DOWNSAMPLE_TARGET = 500  # max points stored per lap
+
+def normalize_lap_samples(samples: list) -> tuple[list, list]:
+    """
+    Normalise a lap's raw sample list to distance-based coordinates.
+
+    Returns (normalised_samples, cumulative_distances_m) where each sample
+    gains a `distance_norm` field (0.0 lap-start → 1.0 lap-end).
+
+    Strategy:
+    - Primary: use px/py/pz position fields; compute Euclidean deltas.
+    - Fallback: use elapsed time `t`; treat as linear distance proxy.
+
+    Returned samples are downsampled to at most _DOWNSAMPLE_TARGET points.
+    """
+    if not samples:
+        return [], []
+
+    has_position = all("px" in s and "py" in s and "pz" in s for s in samples)
+
+    cum_dist: list[float] = [0.0]
+    if has_position:
+        for i in range(1, len(samples)):
+            dx = samples[i]["px"] - samples[i - 1]["px"]
+            dy = samples[i]["py"] - samples[i - 1]["py"]
+            dz = samples[i]["pz"] - samples[i - 1]["pz"]
+            cum_dist.append(cum_dist[-1] + _math.sqrt(dx * dx + dy * dy + dz * dz))
+    else:
+        for s in samples[1:]:
+            cum_dist.append(s["t"])
+
+    total = cum_dist[-1]
+    if total <= 0:
+        # All identical positions — fall back to index-based
+        total = len(samples) - 1 or 1
+        cum_dist = [i for i in range(len(samples))]
+
+    # Downsample evenly if over target
+    step = max(1, len(samples) // _DOWNSAMPLE_TARGET)
+    indices = list(range(0, len(samples), step))
+    # Always include last sample
+    if indices[-1] != len(samples) - 1:
+        indices.append(len(samples) - 1)
+
+    norm_samples = []
+    dist_m_out = []
+    for i in indices:
+        s = dict(samples[i])
+        s["distance_norm"] = round(cum_dist[i] / total, 6)
+        norm_samples.append(s)
+        dist_m_out.append(round(cum_dist[i], 2))
+
+    return norm_samples, dist_m_out
+
+
+def _db_save_lap_samples(session_id: str, lap_number: int,
+                          samples: list, dist_m: list):
+    with _db_lock:
+        conn = _db_connect()
+        try:
+            conn.execute(
+                """INSERT OR REPLACE INTO lap_samples
+                   (session_id, lap_number, samples_json, distance_m_json, created_at)
+                   VALUES (?,?,?,?,?)""",
+                (session_id, lap_number,
+                 json.dumps(samples), json.dumps(dist_m),
+                 datetime.now().isoformat())
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def _db_get_lap_samples(session_id: str, lap_number: int) -> Optional[dict]:
+    with _db_lock:
+        conn = _db_connect()
+        try:
+            row = conn.execute(
+                "SELECT samples_json, distance_m_json FROM lap_samples "
+                "WHERE session_id=? AND lap_number=?",
+                (session_id, lap_number)
+            ).fetchone()
+            if row:
+                return {
+                    "samples": json.loads(row["samples_json"]),
+                    "distance_m": json.loads(row["distance_m_json"]),
+                }
+            return None
+        finally:
+            conn.close()
+
+
+def _store_session_lap_samples(session_id: str, completed_laps: list):
+    """
+    Normalise and persist lap_samples rows for every lap within 102% of
+    the session best lap time. Called from Session.close().
+    """
+    if not completed_laps:
+        return
+
+    valid = [lap for lap in completed_laps
+             if lap.lap_time_s and lap.lap_time_s > 0]
+    if not valid:
+        return
+
+    best = min(lap.lap_time_s for lap in valid)
+    threshold = best * 1.02
+
+    for lap in valid:
+        if lap.lap_time_s <= threshold and lap.samples:
+            try:
+                norm, dist_m = normalize_lap_samples(lap.samples)
+                _db_save_lap_samples(session_id, lap.lap_number, norm, dist_m)
+            except Exception as exc:
+                log.warning(f"lap_samples write failed lap {lap.lap_number}: {exc}")
+
+
+def _sector_time_from_samples(samples: list, lo: float, hi: float) -> Optional[float]:
+    """Time spent between two distance_norm boundaries, read from sample 't' field."""
+    if not samples:
+        return None
+
+    def t_at(target: float) -> float:
+        closest = min(samples, key=lambda s: abs(s.get("distance_norm", 0.0) - target))
+        return closest["t"]
+
+    t_lo = samples[0]["t"] if lo <= 0.0 else t_at(lo)
+    t_hi = samples[-1]["t"] if hi >= 1.0 else t_at(hi)
+    delta = t_hi - t_lo
+    return round(delta, 3) if delta > 0 else None
+
+
+def _stitch_sector_samples(
+    s1_samples: list, s2_samples: list, s3_samples: list,
+    s1_t: float, s2_t: float,
+) -> list:
+    """
+    Combine three sector-best laps into one stitched trace.
+
+    distance_norm values are kept from the original slices (already 0-1).
+    t values are re-offset per sector so the stitched lap has a continuous
+    elapsed-time axis: S1 t as-is, S2 offset to start at s1_t, S3 offset
+    to start at s1_t+s2_t.
+    """
+    def _slice(samples, lo, hi):
+        return [dict(s) for s in samples if lo <= s.get("distance_norm", 0.0) <= hi]
+
+    part1 = _slice(s1_samples, 0.0,  0.334)
+    part2 = _slice(s2_samples, 0.332, 0.668)
+    part3 = _slice(s3_samples, 0.666, 1.0)
+
+    # Re-offset t so sectors chain continuously
+    if part2:
+        off = s1_t - part2[0]["t"]
+        for s in part2:
+            s["t"] = round(s["t"] + off, 3)
+    if part3:
+        off = (s1_t + s2_t) - part3[0]["t"]
+        for s in part3:
+            s["t"] = round(s["t"] + off, 3)
+
+    # Blend sample at each sector boundary
+    def _blend(left, right, norm):
+        if not left or not right:
+            return []
+        skip = {"distance_norm", "t", "px", "py", "pz"}
+        shared = {k for k in left[-1] if k not in skip} & {k for k in right[0] if k not in skip}
+        mid: dict = {
+            "distance_norm": norm,
+            "t": round((left[-1]["t"] + right[0]["t"]) / 2, 3),
+        }
+        for k in shared:
+            try:
+                mid[k] = round((left[-1][k] + right[0][k]) / 2, 4)
+            except (TypeError, ValueError):
+                mid[k] = right[0][k]
+        return [mid]
+
+    mid12 = _blend(part1, part2, 0.333)
+    mid23 = _blend(part2, part3, 0.667)
+
+    p1 = part1[:-1] if mid12 and part1 else part1
+    p2 = part2[1:-1] if mid12 and mid23 and part2 else (
+         part2[1:]  if mid12 and part2 else
+         part2[:-1] if mid23 and part2 else part2)
+    p3 = part3[1:] if mid23 and part3 else part3
+
+    return p1 + mid12 + p2 + mid23 + p3
+
+
+def update_track_references(track: str, game: str):
+    """
+    Recompute best-lap and theoretical-best references for *track*.
+
+    Reads sessions+laps+lap_samples; writes track_references.
+    Non-blocking: called via _update_track_references_bg() in a daemon thread.
+    """
+    if not track or track == "unknown":
+        return
+
+    # All timed laps at this track, fastest first
+    with _db_lock:
+        conn = _db_connect()
+        try:
+            rows = conn.execute(
+                """SELECT l.session_id, l.lap_number, l.lap_time_s, s.started_at
+                   FROM laps l
+                   JOIN sessions s ON l.session_id = s.session_id
+                   WHERE s.track=? AND s.game=?
+                     AND l.lap_time_s IS NOT NULL AND l.lap_time_s > 0
+                   ORDER BY l.lap_time_s ASC""",
+                (track, game),
+            ).fetchall()
+        finally:
+            conn.close()
+
+    if not rows:
+        return
+
+    # ── Best lap reference ──────────────────────────────────────────────────
+    best_row = rows[0]
+    best_data = _db_get_lap_samples(best_row["session_id"], best_row["lap_number"])
+    if best_data:
+        with _db_lock:
+            conn = _db_connect()
+            try:
+                conn.execute(
+                    """INSERT OR REPLACE INTO track_references
+                       (track, reference_type, session_id, lap_number,
+                        samples_json, updated_at)
+                       VALUES (?,?,?,?,?,?)""",
+                    (track, "best_lap",
+                     best_row["session_id"], best_row["lap_number"],
+                     json.dumps(best_data["samples"]),
+                     datetime.now().isoformat()),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+    # ── Theoretical best ────────────────────────────────────────────────────
+    # For each lap with stored samples, compute approximate sector times by
+    # splitting the distance_norm range into equal thirds.
+    best_s = [None, None, None]          # best sector time per sector
+    best_meta = [None, None, None]       # {session_id, lap, samples} per sector
+    sector_bounds = [(0.0, 0.333), (0.333, 0.667), (0.667, 1.0)]
+
+    for row in rows:
+        lap_data = _db_get_lap_samples(row["session_id"], row["lap_number"])
+        if not lap_data or not lap_data["samples"]:
+            continue
+        samples = lap_data["samples"]
+        for i, (lo, hi) in enumerate(sector_bounds):
+            st = _sector_time_from_samples(samples, lo, hi)
+            if st is None:
+                continue
+            if best_s[i] is None or st < best_s[i]:
+                best_s[i] = st
+                best_meta[i] = {
+                    "session_id": row["session_id"],
+                    "lap": row["lap_number"],
+                    "samples": samples,
+                }
+
+    if not all(best_meta):
+        return  # not enough data for a theoretical best
+
+    s1_t, s2_t, s3_t = best_s
+    theoretical_best = round(s1_t + s2_t + s3_t, 3)
+    stitched = _stitch_sector_samples(
+        best_meta[0]["samples"], best_meta[1]["samples"], best_meta[2]["samples"],
+        s1_t, s2_t,
+    )
+
+    with _db_lock:
+        conn = _db_connect()
+        try:
+            conn.execute(
+                """INSERT OR REPLACE INTO track_references
+                   (track, reference_type, session_id, lap_number,
+                    samples_json,
+                    theoretical_s1_s, theoretical_s1_session_id, theoretical_s1_lap,
+                    theoretical_s2_s, theoretical_s2_session_id, theoretical_s2_lap,
+                    theoretical_s3_s, theoretical_s3_session_id, theoretical_s3_lap,
+                    theoretical_best_s, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (track, "theoretical",
+                 None, None,
+                 json.dumps(stitched),
+                 s1_t, best_meta[0]["session_id"], best_meta[0]["lap"],
+                 s2_t, best_meta[1]["session_id"], best_meta[1]["lap"],
+                 s3_t, best_meta[2]["session_id"], best_meta[2]["lap"],
+                 theoretical_best,
+                 datetime.now().isoformat()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    log.info(
+        f"track_references: {track!r} | "
+        f"best={best_row['lap_time_s']:.3f}s | theoretical={theoretical_best:.3f}s"
+    )
+
+
+def _update_track_references_bg(track: str, game: str):
+    try:
+        update_track_references(track, game)
+    except Exception as exc:
+        log.warning(f"track_references update failed ({track!r}): {exc}")
+
 
 # ─── AI Analysis ──────────────────────────────────────────────────────────────
 
@@ -3467,6 +4135,129 @@ async def handle_status(reader, writer):
                 writer.write(_http_response("200 OK", "application/json", laps_file.read_bytes()))
             except OSError:
                 writer.write(_http_response("404 Not Found", "application/json", b"[]"))
+
+        elif path == "/sessions/references":
+            qs = {k: urllib.parse.unquote_plus(v)
+                  for pair in query_string.split("&") if "=" in pair
+                  for k, v in [pair.split("=", 1)]}
+            track_q = qs.get("track", "")
+            if not track_q:
+                writer.write(_http_response("400 Bad Request", "application/json",
+                                            b'{"error":"track required"}'))
+            else:
+                with _db_lock:
+                    conn = _db_connect()
+                    try:
+                        rows = {
+                            row["reference_type"]: row
+                            for row in conn.execute(
+                                "SELECT * FROM track_references WHERE track=?", (track_q,)
+                            ).fetchall()
+                        }
+                    finally:
+                        conn.close()
+                result: dict = {}
+                if "best_lap" in rows:
+                    r = rows["best_lap"]
+                    # Fetch session date
+                    with _db_lock:
+                        conn = _db_connect()
+                        try:
+                            srow = conn.execute(
+                                "SELECT started_at FROM sessions WHERE session_id=?",
+                                (r["session_id"],)
+                            ).fetchone()
+                        finally:
+                            conn.close()
+                    # Get lap time from laps table
+                    with _db_lock:
+                        conn = _db_connect()
+                        try:
+                            lrow = conn.execute(
+                                "SELECT lap_time_s FROM laps WHERE session_id=? AND lap_number=?",
+                                (r["session_id"], r["lap_number"])
+                            ).fetchone()
+                        finally:
+                            conn.close()
+                    result["best_lap"] = {
+                        "lap_time_s": lrow["lap_time_s"] if lrow else None,
+                        "session_id": r["session_id"],
+                        "session_date": (srow["started_at"] or "")[:10] if srow else "",
+                        "lap_number": r["lap_number"],
+                    }
+                if "theoretical" in rows:
+                    r = rows["theoretical"]
+                    def _sdate(sid):
+                        if not sid:
+                            return ""
+                        with _db_lock:
+                            conn = _db_connect()
+                            try:
+                                row = conn.execute(
+                                    "SELECT started_at FROM sessions WHERE session_id=?", (sid,)
+                                ).fetchone()
+                            finally:
+                                conn.close()
+                        return (row["started_at"] or "")[:10] if row else ""
+                    result["theoretical"] = {
+                        "theoretical_best_s": r["theoretical_best_s"],
+                        "s1_s": r["theoretical_s1_s"],
+                        "s1_session_date": _sdate(r["theoretical_s1_session_id"]),
+                        "s2_s": r["theoretical_s2_s"],
+                        "s2_session_date": _sdate(r["theoretical_s2_session_id"]),
+                        "s3_s": r["theoretical_s3_s"],
+                        "s3_session_date": _sdate(r["theoretical_s3_session_id"]),
+                    }
+                writer.write(_http_response("200 OK", "application/json",
+                                            json.dumps(result).encode()))
+
+        elif path == "/sessions/reference-samples":
+            qs = {k: urllib.parse.unquote_plus(v)
+                  for pair in query_string.split("&") if "=" in pair
+                  for k, v in [pair.split("=", 1)]}
+            track_q = qs.get("track", "")
+            ref_type = qs.get("type", "best_lap")
+            if ref_type not in ("best_lap", "theoretical"):
+                ref_type = "best_lap"
+            if not track_q:
+                writer.write(_http_response("400 Bad Request", "application/json",
+                                            b'{"error":"track required"}'))
+            else:
+                with _db_lock:
+                    conn = _db_connect()
+                    try:
+                        row = conn.execute(
+                            "SELECT samples_json FROM track_references "
+                            "WHERE track=? AND reference_type=?",
+                            (track_q, ref_type)
+                        ).fetchone()
+                    finally:
+                        conn.close()
+                if row:
+                    writer.write(_http_response("200 OK", "application/json",
+                                                row["samples_json"].encode()))
+                else:
+                    writer.write(_http_response("404 Not Found", "application/json", b"[]"))
+
+        elif path == "/sessions/lap-samples":
+            qs = {k: urllib.parse.unquote_plus(v)
+                  for pair in query_string.split("&") if "=" in pair
+                  for k, v in [pair.split("=", 1)]}
+            sid = qs.get("session_id", "")
+            try:
+                lap_n = int(qs.get("lap", "0"))
+            except ValueError:
+                lap_n = 0
+            if not sid or not lap_n:
+                writer.write(_http_response("400 Bad Request", "application/json",
+                                            b'{"error":"session_id and lap required"}'))
+            else:
+                data = _db_get_lap_samples(sid, lap_n)
+                if data:
+                    writer.write(_http_response("200 OK", "application/json",
+                                                json.dumps(data["samples"]).encode()))
+                else:
+                    writer.write(_http_response("404 Not Found", "application/json", b"[]"))
 
         elif path == "/sessions/update" and method == "POST":
             try:
