@@ -3587,8 +3587,7 @@ function renderHeader(){
   const teleLink=document.getElementById('tele-link');
   let teleHref='/sessions/telemetry?id='+encodeURIComponent(_id);
   if(game)teleHref+='&game='+encodeURIComponent(game);
-  const track=s.track&&s.track!=='unknown'?s.track:(_strack||'');
-  if(track)teleHref+='&track='+encodeURIComponent(track);
+  if(track&&track!=='Unknown Track')teleHref+='&track='+encodeURIComponent(track);
   teleLink.href=teleHref;teleLink.style.display='';
 }
 function renderLaps(){
