@@ -143,6 +143,9 @@ FM_PACKET_SIZE_FH = 331  # Forza Horizon 4 / 5 Car Dash (adds tire wear + track 
 
 # Forza track ordinals — shared across FM7, FM2023, FH4, FH5 (user-verified)
 FORZA_TRACKS = {
+    # FH5 confirmed ordinals
+    860: "Brands Hatch Grand Prix",
+    # Unconfirmed — carried from earlier research, may be wrong for FH5
     0:   "Test Track Airfield",
     1:   "Test Track Airfield Drag",
     3:   "Top Gear Full Circuit",
@@ -164,8 +167,8 @@ FORZA_TRACKS = {
     48:  "Road Atlanta Full Circuit",
     53:  "Silverstone Grand Prix",
     55:  "Silverstone National",
-    60:  "Brands Hatch Grand Prix",
-    62:  "Brands Hatch Indy Circuit",
+    60:  "Brands Hatch Grand Prix (unconfirmed)",
+    62:  "Brands Hatch Indy Circuit (unconfirmed)",
     66:  "Laguna Seca Full Circuit",
     68:  "Homestead-Miami Speedway",
     73:  "Mugello Full Circuit",
@@ -180,6 +183,9 @@ FORZA_TRACKS = {
     115: "Hakone Circuit",
     116: "Kyalami Grand Prix Circuit",
 }
+
+# Ordinals seen in live packets but not in FORZA_TRACKS — logged once each
+_unknown_ordinals_seen: set = set()
 
 
 # i I [51×f] [5×i: car_ordinal/class/pi/drivetrain/cylinders] [17×f] H [6×B] [3×b]
@@ -244,7 +250,11 @@ def parse_forza(data: bytes) -> Optional[dict]:
             parsed["tire_wear_rr"]  = values[len(FM_FIELDS) + 3]
             ord_val                 = values[len(FM_FIELDS) + 4]
             parsed["track_ordinal"] = ord_val
-            parsed["track"]         = FORZA_TRACKS.get(ord_val, f"Track #{ord_val}" if ord_val else "unknown")
+            track_name = FORZA_TRACKS.get(ord_val)
+            if ord_val and track_name is None and ord_val not in _unknown_ordinals_seen:
+                _unknown_ordinals_seen.add(ord_val)
+                log.warning(f"Unknown FH5 track ordinal {ord_val} — add to FORZA_TRACKS once identified")
+            parsed["track"] = track_name if track_name else (f"Track #{ord_val}" if ord_val else "unknown")
         else:
             parsed["track"] = "unknown"  # FM2023 doesn't broadcast track in telemetry
         parsed["speed_mph"]      = parsed["speed"] * 2.237
