@@ -1157,7 +1157,7 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 .panels{flex:1;display:flex;min-height:0;overflow:hidden}
 .panel-col{flex:1;display:flex;flex-direction:column;padding:12px 14px;border-right:1px solid #111;min-width:0;border-radius:0}
 .panel-col:last-child{border-right:none}
-.p-lbl{font-size:1rem;color:#888;text-transform:uppercase;letter-spacing:3px;margin-bottom:10px;flex:none}
+.p-lbl{font-size:1rem;color:lightgrey;text-transform:uppercase;letter-spacing:3px;margin-bottom:10px;flex:none}
 
 /* vertical bar (throttle / brake) */
 .vbar-wrap{flex:1;background:#0a0a0a;border-radius:3px;position:relative;overflow:hidden;margin-bottom:12px;min-height:0}
@@ -1171,19 +1171,22 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 /* slip column */
 .slip-bars{flex:1;display:flex;gap:12px;min-height:0}
 .slip-bar-col{flex:1;display:flex;flex-direction:column;min-width:0}
-.slip-bar-lbl{font-size:.88rem;color:#777;text-transform:uppercase;letter-spacing:1px;text-align:center;margin-bottom:6px;flex:none}
+.slip-bar-lbl{font-size:.88rem;color:lightgrey;text-transform:uppercase;letter-spacing:1px;text-align:center;margin-bottom:6px;flex:none}
 .slip-num{font-size:2.1rem;font-weight:900;text-align:center;flex:none;line-height:1;transition:color .1s;margin-top:10px}
 
 /* timing column */
-.timing-vals{flex:1;display:flex;flex-direction:column;gap:6px;min-height:0;justify-content:space-around}
-.t-lbl{font-size:.82rem;color:#888;text-transform:uppercase;letter-spacing:2px;margin-bottom:1px}
+.t-lbl{font-size:.82rem;color:lightgrey;text-transform:uppercase;letter-spacing:2px;margin-bottom:1px}
 .t-val{font-size:1.6rem;font-weight:900;color:#e0e0e0;letter-spacing:.5px;line-height:1.1}
 .t-val.green{color:#22c55e}
-.t-delta-row{border-top:1px solid #111;padding-top:8px;margin-top:2px}
+.timing-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 8px;flex:none;margin-bottom:10px}
+.t-delta-row{border-top:1px solid #111;padding-top:8px;margin-bottom:10px}
 .delta-val{font-size:2.1rem;font-weight:900;letter-spacing:-1px;border-radius:3px;padding:0 4px;line-height:1}
 .delta-val.ahead{color:#22c55e}
 .delta-val.behind{color:#ef4444}
 .delta-val.even{color:#555}
+.tyre-inline-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 8px}
+.tyre-inline-cell{display:flex;flex-direction:column}
+.tyre-inline-lbl{font-size:.82rem;color:lightgrey;text-transform:uppercase;letter-spacing:2px;margin-bottom:1px}
 
 /* ── BOTTOM STRIP: Gear · Speed · RPM · Tyres ── */
 .bot-panels{flex:none;height:68px;display:flex;align-items:stretch;border-bottom:1px solid #0a0a0a}
@@ -1206,11 +1209,7 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 @keyframes sf{0%,100%{box-shadow:inset 0 0 20px #ef000066}50%{box-shadow:inset 0 0 40px #ff440099}}
 .rpm-gear-mark{position:absolute;top:0;bottom:0;width:2px;background:#111}
 .rpm-num{font-size:.7rem;color:#333;margin-top:3px;letter-spacing:1px}
-.tyres-bp{flex:none;align-items:flex-start;justify-content:center;padding:8px 16px}
-.tyre-grid{display:grid;grid-template-columns:1fr 1fr;gap:1px 10px}
-.tyre-cell{display:flex;align-items:center;gap:4px}
-.tyre-corner{font-size:.65rem;color:#444;width:20px;font-weight:bold;letter-spacing:.5px}
-.tyre-temp{font-size:.85rem;font-weight:bold;transition:color .2s}
+.tyre-temp{font-size:1.6rem;font-weight:900;transition:color .2s;letter-spacing:.5px;line-height:1.1}
 .tyre-temp.cold{color:#4a7aaa}
 .tyre-temp.ok  {color:#22c55e}
 .tyre-temp.hot {color:#f59e0b}
@@ -1327,7 +1326,7 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 
     <div class="panel-col">
       <div class="p-lbl">Lap Timing</div>
-      <div class="timing-vals">
+      <div class="timing-grid">
         <div>
           <div class="t-lbl">Current</div>
           <div class="t-val" id="t-cur">—</div>
@@ -1341,12 +1340,33 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
           <div class="t-val" id="t-last">—</div>
         </div>
         <div>
-          <div class="t-lbl">Lap</div>
+          <div class="t-lbl">L#</div>
           <div class="t-val" id="t-lap">—</div>
         </div>
-        <div class="t-delta-row">
-          <div class="t-lbl">Delta</div>
-          <div class="delta-val even" id="t-delta">—</div>
+      </div>
+      <div class="t-delta-row">
+        <div class="t-lbl">Delta</div>
+        <div class="delta-val even" id="t-delta">—</div>
+      </div>
+      <div>
+        <div class="t-lbl">Tyres</div>
+        <div class="tyre-inline-grid" style="margin-top:6px">
+          <div class="tyre-inline-cell">
+            <div class="tyre-inline-lbl">FL</div>
+            <span class="tyre-temp na" id="ty-fl">—</span>
+          </div>
+          <div class="tyre-inline-cell">
+            <div class="tyre-inline-lbl">FR</div>
+            <span class="tyre-temp na" id="ty-fr">—</span>
+          </div>
+          <div class="tyre-inline-cell">
+            <div class="tyre-inline-lbl">RL</div>
+            <span class="tyre-temp na" id="ty-rl">—</span>
+          </div>
+          <div class="tyre-inline-cell">
+            <div class="tyre-inline-lbl">RR</div>
+            <span class="tyre-temp na" id="ty-rr">—</span>
+          </div>
         </div>
       </div>
     </div>
@@ -1374,16 +1394,6 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
         <div class="rpm-gear-mark" id="rpm-mark" style="left:75%"></div>
       </div>
       <div class="rpm-num" id="rpm-num">—</div>
-    </div>
-    <div class="bp tyres-bp">
-      <div class="bp-lbl">Tyres</div>
-      <div class="tyre-grid">
-        <div class="tyre-cell"><span class="tyre-corner">FL</span><span class="tyre-temp na" id="ty-fl">—</span></div>
-        <div class="tyre-cell"><span class="tyre-corner">FR</span><span class="tyre-temp na" id="ty-fr">—</span></div>
-        <div class="tyre-cell"><span class="tyre-corner">RL</span><span class="tyre-temp na" id="ty-rl">—</span></div>
-        <div class="tyre-cell"><span class="tyre-corner">RR</span><span class="tyre-temp na" id="ty-rr">—</span></div>
-      </div>
-      <span style="font-size:.6rem;color:#2a2a2a;margin-top:2px" id="ty-cmp"></span>
     </div>
   </div>
 
