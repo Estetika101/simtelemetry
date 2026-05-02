@@ -3298,7 +3298,7 @@ function setXMode(m){
 // ── Lap selector ──────────────────────────────────────────────────────────
 function renderLapList(){
   const best=_sess.best_lap_time_s;
-  $('lap-list').innerHTML=_laps.filter(l=>l.lap_time_s).map(l=>{
+  $('lap-list').innerHTML=_laps.filter(l=>l.lap_time_s&&l.lap_number>0).map(l=>{
     const ci=_selectedLaps.indexOf(l.lap_number);
     const checked=ci>=0;
     const col=checked?LAP_COLORS[ci]:'#444';
@@ -3370,7 +3370,8 @@ async function init(){
   $('bc-sess').href=sessHref;
   // Best lap default
   const best=_sess.best_lap_time_s;
-  const bestLap=_laps.find(l=>best&&Math.abs(l.lap_time_s-best)<0.001)||_laps[0];
+  const validLaps=_laps.filter(l=>l.lap_number>0&&l.lap_time_s);
+  const bestLap=validLaps.find(l=>best&&Math.abs(l.lap_time_s-best)<0.001)||validLaps[0];
   if(bestLap){
     _selectedLaps=[bestLap.lap_number];
     _primaryLap=bestLap.lap_number;
@@ -4356,6 +4357,81 @@ def _store_session_lap_samples(session_id: str, completed_laps: list):
                 log.warning(f"lap_samples write failed lap {lap.lap_number}: {exc}")
 
 
+def _backfill_lap_samples():
+    """
+    Back-fill lap_samples + track_references from existing _laps.json files
+    for sessions that have no stored samples yet.  Runs once at startup in a
+    daemon thread so it never blocks the listener.
+    """
+    sessions_dir = storage_path() / "sessions"
+    if not sessions_dir.exists():
+        return
+
+    with _db_lock:
+        conn = _db_connect()
+        try:
+            rows = conn.execute(
+                """SELECT s.session_id, s.track, s.game
+                   FROM sessions s
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM lap_samples ls WHERE ls.session_id = s.session_id
+                   )
+                   AND s.lap_count > 0
+                   ORDER BY s.started_at DESC LIMIT 500"""
+            ).fetchall()
+        finally:
+            conn.close()
+
+    if not rows:
+        return
+
+    tracks_to_update: set = set()
+    filled = 0
+    for row in rows:
+        sid = row["session_id"]
+        laps_file = sessions_dir / f"{sid}_laps.json"
+        if not laps_file.exists():
+            continue
+        try:
+            laps_data = json.loads(laps_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(laps_data, list):
+            continue
+        valid = [l for l in laps_data
+                 if l.get("lap_number") and l.get("lap_time_s") and l["lap_time_s"] > 0]
+        if not valid:
+            continue
+        best = min(l["lap_time_s"] for l in valid)
+        for lap in valid:
+            if lap["lap_time_s"] > best * 1.02:
+                continue
+            samples = lap.get("samples", [])
+            if not samples:
+                continue
+            try:
+                norm, dist_m = normalize_lap_samples(samples)
+                _db_save_lap_samples(sid, lap["lap_number"], norm, dist_m)
+                filled += 1
+            except Exception as exc:
+                log.warning(f"backfill lap_samples {sid} L{lap['lap_number']}: {exc}")
+        track = row["track"] or ""
+        game  = row["game"]  or ""
+        if track and track != "unknown":
+            tracks_to_update.add((track, game))
+
+    for track, game in tracks_to_update:
+        try:
+            update_track_references(track, game)
+        except Exception as exc:
+            log.warning(f"backfill track_references {track!r}: {exc}")
+
+    log.info(
+        f"backfill_lap_samples: {filled} laps stored, "
+        f"{len(tracks_to_update)} track references updated"
+    )
+
+
 def _sector_time_from_samples(samples: list, lo: float, hi: float) -> Optional[float]:
     """Time spent between two distance_norm boundaries, read from sample 't' field."""
     if not samples:
@@ -5265,6 +5341,7 @@ async def handle_status(reader, writer):
 async def main():
     ensure_storage()
     _db_init()
+    threading.Thread(target=_backfill_lap_samples, daemon=True).start()
     log.info("SimTelemetry listener starting...")
 
     loop = asyncio.get_event_loop()
