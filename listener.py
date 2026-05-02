@@ -2139,7 +2139,7 @@ function toggleStream() {
 """
 
 
-TRACKS_HTML = """<!DOCTYPE html>
+GAMES_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -2155,6 +2155,97 @@ a{color:inherit;text-decoration:none}
 .tb-nav a{font-size:.8rem;color:#666;letter-spacing:1px;text-transform:uppercase}
 .tb-nav a:hover{color:#ccc}
 .tb-nav a.cur{color:#e0e0e0;border-bottom:1px solid #888}
+.page{padding:32px 28px}
+.page-hdr{margin-bottom:28px}
+.page-hdr h2{font-size:1.1rem;color:#e0e0e0;letter-spacing:2px;text-transform:uppercase}
+.games-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+.gc{background:#060608;border:1px solid #1a1a1a;padding:24px 22px;cursor:pointer;transition:border-color .15s}
+.gc:hover{border-color:#2a2a3a;background:#08080e}
+.gc.empty{opacity:.4;cursor:default}
+.gc.empty:hover{border-color:#1a1a1a;background:#060608}
+.gc-name{font-size:1.6rem;font-weight:900;color:#e0e0e0;letter-spacing:1px;margin-bottom:4px}
+.gc-desc{font-size:.72rem;color:#444;letter-spacing:.5px;margin-bottom:18px}
+.gc-stats{display:flex;gap:24px}
+.gc-stat .v{font-size:1.2rem;font-weight:900;color:#fff}
+.gc-stat .l{font-size:.65rem;color:#555;text-transform:uppercase;letter-spacing:1px;margin-top:1px}
+.gc-last{font-size:.72rem;color:#333;margin-top:14px;border-top:1px solid #0e0e0e;padding-top:10px}
+</style>
+</head>
+<body>
+<div class="tb">
+  <h1>SimTelemetry</h1>
+  <nav class="tb-nav">
+    <a href="/">Live</a>
+    <a href="/sessions" class="cur">Sessions</a>
+    <a href="/setup">Setup</a>
+    <a href="/admin" id="nav-admin" style="display:none">Admin</a>
+  </nav>
+</div>
+<script>if(location.search.includes('debug=true'))document.getElementById('nav-admin').style.display='';</script>
+<div class="page">
+  <div class="page-hdr"><h2>Sessions</h2></div>
+  <div class="games-grid" id="grid"><div style="color:#333;padding:24px">Loading&hellip;</div></div>
+</div>
+<script>
+const GAME_LABELS={'forza_motorsport':'Forza','acc':'ACC','f1':'F1'};
+const GAME_DESC={'forza_motorsport':'Forza Motorsport / Horizon','acc':'Assetto Corsa Competizione','f1':'F1 2023 / 2024'};
+function fmtDate(iso){if(!iso)return null;return new Date(iso).toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'});}
+async function init(){
+  let games=[];
+  try{games=await fetch('/sessions/games').then(r=>r.json());}catch(e){}
+  const grid=document.getElementById('grid');
+  if(!games.length){grid.innerHTML='<div style="color:#333;padding:24px">No sessions recorded yet</div>';return;}
+  grid.innerHTML=games.map((g,i)=>{
+    const label=GAME_LABELS[g.game]||g.game;
+    const desc=GAME_DESC[g.game]||'';
+    const empty=!g.session_count;
+    const last=fmtDate(g.last_played);
+    return `<div class="gc${empty?' empty':''}" data-i="${i}">
+      <div class="gc-name">${label}</div>
+      <div class="gc-desc">${desc}</div>
+      <div class="gc-stats">
+        <div class="gc-stat"><div class="v">${g.session_count||0}</div><div class="l">Sessions</div></div>
+        <div class="gc-stat"><div class="v">${g.track_count||0}</div><div class="l">Tracks</div></div>
+      </div>
+      ${last?`<div class="gc-last">Last played ${last}</div>`:'<div class="gc-last">No sessions yet</div>'}
+    </div>`;
+  }).join('');
+  document.querySelectorAll('.gc:not(.empty)').forEach((el,i)=>{
+    const game=games.filter(g=>g.session_count)[i]||games[i];
+    el.addEventListener('click',()=>location.href='/sessions/game?name='+encodeURIComponent(game.game));
+  });
+  // wire non-empty in order
+  let ni=0;
+  games.forEach(g=>{
+    if(!g.session_count) return;
+    const el=document.querySelectorAll('.gc:not(.empty)')[ni++];
+    if(el) el.addEventListener('click',()=>location.href='/sessions/game?name='+encodeURIComponent(g.game));
+  });
+}
+init();
+</script>
+</body>
+</html>
+"""
+
+TRACKS_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>SimTelemetry &middot; Tracks</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#000;color:#e0e0e0;font-family:'Courier New',monospace;min-height:100vh}
+a{color:inherit;text-decoration:none}
+.tb{height:50px;display:flex;align-items:center;padding:0 18px;gap:14px;border-bottom:1px solid #1e1e1e;position:sticky;top:0;background:#000;z-index:10}
+.tb h1{font-size:1.3rem;color:#e0e0e0;letter-spacing:3px;text-transform:uppercase;flex:1}
+.tb-nav{display:flex;gap:14px}
+.tb-nav a{font-size:.8rem;color:#666;letter-spacing:1px;text-transform:uppercase}
+.tb-nav a:hover{color:#ccc}
+.tb-nav a.cur{color:#e0e0e0;border-bottom:1px solid #888}
+.breadcrumb{font-size:.78rem;color:#555;padding:10px 20px;border-bottom:1px solid #111}
+.breadcrumb a{color:#444}.breadcrumb a:hover{color:#888}
 .page{padding:24px}
 .page-hdr{display:flex;align-items:baseline;gap:16px;margin-bottom:24px}
 .page-hdr h2{font-size:1.1rem;color:#e0e0e0;letter-spacing:2px;text-transform:uppercase}
@@ -2184,17 +2275,28 @@ a{color:inherit;text-decoration:none}
   </nav>
 </div>
 <script>if(location.search.includes('debug=true'))document.getElementById('nav-admin').style.display='';</script>
+<div class="breadcrumb"><a href="/sessions">Sessions</a> &rsaquo; <span id="bc-game">Tracks</span></div>
 <div class="page">
-  <div class="page-hdr"><h2>Tracks</h2><span class="count" id="count"></span></div>
+  <div class="page-hdr">
+    <h2 id="page-title">Tracks</h2>
+    <span class="count" id="count"></span>
+  </div>
   <div class="tracks-grid" id="grid"><div class="empty-state">Loading&hellip;</div></div>
 </div>
 <script>
+const GAME_LABELS={'forza_motorsport':'Forza','acc':'ACC','f1':'F1'};
 function fmtLap(s){if(!s)return '—';const m=Math.floor(s/60);return m+':'+(s%60).toFixed(3).padStart(6,'0');}
 function fmtDate(iso){if(!iso)return '—';return new Date(iso).toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'});}
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+const _game=new URLSearchParams(location.search).get('name')||'';
 let _tracks=[];
 async function init(){
-  try{_tracks=await fetch('/sessions/tracks').then(r=>r.json());}catch(e){_tracks=[];}
+  const label=GAME_LABELS[_game]||_game||'All';
+  document.getElementById('bc-game').textContent=label;
+  document.getElementById('page-title').textContent=label+' Tracks';
+  document.title='SimTelemetry · '+label;
+  const url='/sessions/tracks'+(_game?'?game='+encodeURIComponent(_game):'');
+  try{_tracks=await fetch(url).then(r=>r.json());}catch(e){_tracks=[];}
   const grid=document.getElementById('grid');
   document.getElementById('count').textContent=_tracks.length+' track'+(_tracks.length!==1?'s':'');
   if(!_tracks.length){grid.innerHTML='<div class="empty-state">No sessions recorded yet</div>';return;}
@@ -2211,7 +2313,11 @@ async function init(){
     </div>`;
   }).join('');
   document.querySelectorAll('.tc').forEach((el,i)=>{
-    el.addEventListener('click',()=>location.href='/sessions/track?name='+encodeURIComponent(_tracks[i].track));
+    el.addEventListener('click',()=>{
+      let url='/sessions/track?name='+encodeURIComponent(_tracks[i].track);
+      if(_game) url+='&game='+encodeURIComponent(_game);
+      location.href=url;
+    });
     loadTip(_tracks[i].track,i);
   });
 }
@@ -2277,7 +2383,7 @@ td.date-col{color:#e0e0e0}
   </nav>
 </div>
 <script>if(location.search.includes('debug=true'))document.getElementById('nav-admin').style.display='';</script>
-<div class="breadcrumb"><a href="/sessions">Sessions</a> &rsaquo; <span id="bc-track">Track</span></div>
+<div class="breadcrumb"><a href="/sessions">Sessions</a> &rsaquo; <a href="#" id="bc-game"></a> <span id="bc-sep" style="display:none"> &rsaquo; </span><span id="bc-track">Track</span></div>
 <div class="track-hdr">
   <div class="track-name" id="hdr-name">Loading&hellip;</div>
   <div class="hdr-stat"><div class="v" id="hdr-best">&mdash;</div><div class="l">Best Lap</div></div>
@@ -2311,12 +2417,22 @@ function spark(times){
   return `<svg width="${W}" height="${H}" style="vertical-align:middle"><polyline points="${pts}" fill="none" stroke="#22c55e66" stroke-width="1.5" stroke-linejoin="round"/>${dots}</svg>`;
 }
 const _track=new URLSearchParams(location.search).get('name')||'';
+const _game=new URLSearchParams(location.search).get('game')||'';
+const GAME_LABELS={'forza_motorsport':'Forza','acc':'ACC','f1':'F1'};
 let _sessions=[];
 async function init(){
   if(!_track){location.href='/sessions';return;}
   document.getElementById('bc-track').textContent=_track;
   document.title='SimTelemetry · '+_track;
-  try{_sessions=await fetch('/sessions/track/data?name='+encodeURIComponent(_track)).then(r=>r.json());}catch(e){_sessions=[];}
+  const bcGame=document.getElementById('bc-game');
+  const bcSep=document.getElementById('bc-sep');
+  if(_game&&bcGame){
+    bcGame.textContent=GAME_LABELS[_game]||_game;
+    bcGame.href='/sessions/game?name='+encodeURIComponent(_game);
+    if(bcSep)bcSep.style.display='';
+  }
+  const dataUrl='/sessions/track/data?name='+encodeURIComponent(_track)+(_game?'&game='+encodeURIComponent(_game):'');
+  try{_sessions=await fetch(dataUrl).then(r=>r.json());}catch(e){_sessions=[];}
   renderHeader();
   renderTable();
   loadTip();
@@ -2351,7 +2467,12 @@ function renderTable(){
     </tr>`;
   }).join('');
   document.querySelectorAll('#sess-tbody tr').forEach((tr,i)=>{
-    tr.addEventListener('click',()=>location.href='/sessions/session?id='+encodeURIComponent(_sessions[i].session_id));
+    tr.addEventListener('click',()=>{
+      let u='/sessions/session?id='+encodeURIComponent(_sessions[i].session_id);
+      if(_game)u+='&game='+encodeURIComponent(_game);
+      if(_track)u+='&track='+encodeURIComponent(_track);
+      location.href=u;
+    });
   });
 }
 async function loadTip(){
@@ -2439,6 +2560,8 @@ tr.best-row td:first-child{color:#22c55e88}
 <script>if(location.search.includes('debug=true'))document.getElementById('nav-admin').style.display='';</script>
 <div class="breadcrumb">
   <a href="/sessions">Sessions</a> &rsaquo;
+  <a href="#" id="bc-game" style="display:none"></a>
+  <span id="bc-game-sep" style="display:none"> &rsaquo; </span>
   <a href="#" id="bc-track">Track</a> &rsaquo;
   <span id="bc-sess">Session</span>
 </div>
@@ -2483,6 +2606,9 @@ function fmtLap(s){if(!s)return '—';const m=Math.floor(s/60);return m+':'+(s%6
 function fmtDt(iso){if(!iso)return '—';return new Date(iso).toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});}
 function scls(v){return v>0.25?'crit':v>0.12?'warn':'';}
 const _id=new URLSearchParams(location.search).get('id')||'';
+const _sgame=new URLSearchParams(location.search).get('game')||'';
+const _strack=new URLSearchParams(location.search).get('track')||'';
+const SGAME_LABELS={'forza_motorsport':'Forza','acc':'ACC','f1':'F1'};
 let _sess=null,_laps=[];
 async function init(){
   if(!_id){location.href='/sessions';return;}
@@ -2496,10 +2622,20 @@ async function init(){
 }
 function renderHeader(){
   const s=_sess;
-  const track=s.track&&s.track!=='unknown'?s.track:'Unknown Track';
+  const track=s.track&&s.track!=='unknown'?s.track:(_strack||'Unknown Track');
+  const game=_sgame||s.game||'';
   document.title='SimTelemetry · '+track;
+  if(game){
+    const bg=document.getElementById('bc-game');
+    bg.textContent=SGAME_LABELS[game]||game;
+    bg.href='/sessions/game?name='+encodeURIComponent(game);
+    bg.style.display='';
+    document.getElementById('bc-game-sep').style.display='';
+  }
+  let trackHref='/sessions/track?name='+encodeURIComponent(track);
+  if(game)trackHref+='&game='+encodeURIComponent(game);
   document.getElementById('bc-track').textContent=track;
-  document.getElementById('bc-track').href='/sessions/track?name='+encodeURIComponent(track);
+  document.getElementById('bc-track').href=trackHref;
   document.getElementById('bc-sess').textContent=fmtDt(s.started_at);
   document.getElementById('hdr-track').textContent=track;
   document.getElementById('hdr-sub').textContent=(s.game||'').replace(/_/g,' ')+' · '+fmtDt(s.started_at);
@@ -2724,29 +2860,65 @@ def _db_sessions_list(limit: int = 100) -> list:
         finally:
             conn.close()
 
-def _db_tracks_index() -> list:
-    """Return aggregate stats per track, newest-first by last session date."""
+def _db_games_index() -> list:
+    """Return per-game aggregate stats, newest-first."""
+    all_games = ["forza_motorsport", "acc", "f1"]
     with _db_lock:
         conn = _db_connect()
         try:
             rows = conn.execute("""
+                SELECT game,
+                       COUNT(*) as session_count,
+                       COUNT(DISTINCT CASE WHEN track IS NOT NULL AND track != 'unknown'
+                                           THEN track END) as track_count,
+                       MAX(started_at) as last_played
+                FROM sessions
+                GROUP BY game
+            """).fetchall()
+            by_game = {r["game"]: dict(r) for r in rows}
+            result = []
+            for g in all_games:
+                r = by_game.get(g, {"game": g, "session_count": 0, "track_count": 0, "last_played": None})
+                result.append(r)
+            # sort present-first, then by last_played
+            result.sort(key=lambda x: (x["last_played"] is None, x["last_played"] or ""), reverse=False)
+            result.sort(key=lambda x: x["last_played"] is None)
+            return result
+        finally:
+            conn.close()
+
+def _db_tracks_index(game: Optional[str] = None) -> list:
+    """Return aggregate stats per track, newest-first. Optionally filter by game."""
+    with _db_lock:
+        conn = _db_connect()
+        try:
+            where = "WHERE track IS NOT NULL AND track != 'unknown'"
+            params: list = []
+            if game:
+                where += " AND game=?"
+                params.append(game)
+            rows = conn.execute(f"""
                 SELECT track,
                        COUNT(*) as session_count,
                        MIN(best_lap_time_s) as best_lap_time_s,
                        MAX(started_at) as last_raced
-                FROM sessions
-                WHERE track IS NOT NULL AND track != 'unknown'
+                FROM sessions {where}
                 GROUP BY track
                 ORDER BY last_raced DESC
-            """).fetchall()
+            """, params).fetchall()
             result = []
             for row in rows:
                 r = dict(row)
-                last3 = conn.execute("""
+                trend_params = [r["track"]]
+                trend_extra = ""
+                if game:
+                    trend_extra = " AND game=?"
+                    trend_params.append(game)
+                last3 = conn.execute(f"""
                     SELECT best_lap_time_s FROM sessions
-                    WHERE track=? AND best_lap_time_s IS NOT NULL
+                    WHERE track=? AND best_lap_time_s IS NOT NULL{trend_extra}
                     ORDER BY started_at DESC LIMIT 3
-                """, (r["track"],)).fetchall()
+                """, trend_params).fetchall()
                 times = [l[0] for l in last3]
                 if len(times) >= 2 and times[0] is not None and times[1] is not None:
                     diff = times[0] - times[1]
@@ -2758,17 +2930,22 @@ def _db_tracks_index() -> list:
         finally:
             conn.close()
 
-def _db_track_sessions(track: str) -> list:
+def _db_track_sessions(track: str, game: Optional[str] = None) -> list:
     """Return all sessions for a track, newest-first, with lap time arrays for spark graphs."""
     with _db_lock:
         conn = _db_connect()
         try:
-            rows = conn.execute("""
+            where = "WHERE track=?"
+            params: list = [track]
+            if game:
+                where += " AND game=?"
+                params.append(game)
+            rows = conn.execute(f"""
                 SELECT session_id,game,track,car,race_type,
                        started_at,ended_at,best_lap_time_s,lap_count,
                        ai_analyzed_at,ai_model
-                FROM sessions WHERE track=? ORDER BY started_at DESC
-            """, (track,)).fetchall()
+                FROM sessions {where} ORDER BY started_at DESC
+            """, params).fetchall()
             result = []
             for row in rows:
                 s = dict(row)
@@ -3086,6 +3263,9 @@ async def handle_status(reader, writer):
             writer.write(_http_response("200 OK", "application/json", json.dumps(state, indent=2).encode()))
 
         elif path in ("/sessions", "/sessions/"):
+            writer.write(_http_response("200 OK", "text/html", GAMES_HTML.encode()))
+
+        elif path == "/sessions/game":
             writer.write(_http_response("200 OK", "text/html", TRACKS_HTML.encode()))
 
         elif path == "/sessions/track":
@@ -3098,8 +3278,16 @@ async def handle_status(reader, writer):
             result = _db_sessions_list(100)
             writer.write(_http_response("200 OK", "application/json", json.dumps(result).encode()))
 
+        elif path == "/sessions/games":
+            result = _db_games_index()
+            writer.write(_http_response("200 OK", "application/json", json.dumps(result).encode()))
+
         elif path == "/sessions/tracks":
-            result = _db_tracks_index()
+            qs = {k: urllib.parse.unquote_plus(v)
+                  for pair in query_string.split("&") if "=" in pair
+                  for k, v in [pair.split("=", 1)]}
+            game_filter = qs.get("game", "") or None
+            result = _db_tracks_index(game_filter)
             writer.write(_http_response("200 OK", "application/json", json.dumps(result).encode()))
 
         elif path == "/sessions/track/data":
@@ -3107,7 +3295,8 @@ async def handle_status(reader, writer):
                   for pair in query_string.split("&") if "=" in pair
                   for k, v in [pair.split("=", 1)]}
             track_name = qs.get("name", "")
-            result = _db_track_sessions(track_name)
+            game_filter = qs.get("game", "") or None
+            result = _db_track_sessions(track_name, game_filter)
             writer.write(_http_response("200 OK", "application/json", json.dumps(result).encode()))
 
         elif path == "/sessions/track/tip":
