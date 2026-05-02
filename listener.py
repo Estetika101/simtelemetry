@@ -4345,11 +4345,8 @@ def _store_session_lap_samples(session_id: str, completed_laps: list):
     if not valid:
         return
 
-    best = min(lap.lap_time_s for lap in valid)
-    threshold = best * 1.02
-
     for lap in valid:
-        if lap.lap_time_s <= threshold and lap.samples:
+        if lap.samples:
             try:
                 norm, dist_m = normalize_lap_samples(lap.samples)
                 _db_save_lap_samples(session_id, lap.lap_number, norm, dist_m)
@@ -4373,10 +4370,10 @@ def _backfill_lap_samples():
             rows = conn.execute(
                 """SELECT s.session_id, s.track, s.game
                    FROM sessions s
-                   WHERE NOT EXISTS (
-                       SELECT 1 FROM lap_samples ls WHERE ls.session_id = s.session_id
+                   WHERE s.lap_count > 0
+                   AND s.lap_count > (
+                       SELECT COUNT(*) FROM lap_samples ls WHERE ls.session_id = s.session_id
                    )
-                   AND s.lap_count > 0
                    ORDER BY s.started_at DESC LIMIT 500"""
             ).fetchall()
         finally:
@@ -4402,10 +4399,7 @@ def _backfill_lap_samples():
                  if l.get("lap_number") and l.get("lap_time_s") and l["lap_time_s"] > 0]
         if not valid:
             continue
-        best = min(l["lap_time_s"] for l in valid)
         for lap in valid:
-            if lap["lap_time_s"] > best * 1.02:
-                continue
             samples = lap.get("samples", [])
             if not samples:
                 continue
