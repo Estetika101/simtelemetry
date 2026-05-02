@@ -13,6 +13,8 @@ import logging
 import os
 import shutil
 import socket
+import sqlite3
+import threading
 import urllib.parse
 import struct
 import time
@@ -721,6 +723,8 @@ class Session:
             "best_lap_time_s":  round(self.best_lap_time_s, 3) if self.best_lap_time_s else None,
             "laps":             laps_summary,
         }
+
+        _db_write_session(session_data)
 
         try:
             sp = storage_path()
@@ -2769,6 +2773,233 @@ init();
 """
 
 
+# ─── SQLite Layer ─────────────────────────────────────────────────────────────
+
+_db_lock = threading.Lock()
+
+def _db_connect() -> sqlite3.Connection:
+    db_path = storage_path() / "simtelemetry.db"
+    conn = sqlite3.connect(str(db_path), timeout=10, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+def _db_init():
+    with _db_lock:
+        conn = _db_connect()
+        try:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS sessions (
+                    session_id       TEXT PRIMARY KEY,
+                    game             TEXT,
+                    track            TEXT,
+                    car              TEXT,
+                    session_type     TEXT,
+                    race_type        TEXT,
+                    started_at       TEXT,
+                    ended_at         TEXT,
+                    packet_count     INTEGER DEFAULT 0,
+                    best_lap_time_s  REAL,
+                    lap_count        INTEGER DEFAULT 0,
+                    ai_analysis      TEXT,
+                    ai_analyzed_at   TEXT,
+                    ai_model         TEXT
+                );
+                CREATE TABLE IF NOT EXISTS laps (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id    TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+                    lap_number    INTEGER,
+                    lap_time_s    REAL,
+                    max_speed_mph REAL,
+                    sample_count  INTEGER DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_laps_session  ON laps(session_id);
+                CREATE INDEX IF NOT EXISTS idx_sessions_track ON sessions(track);
+                CREATE INDEX IF NOT EXISTS idx_sessions_start ON sessions(started_at);
+            """)
+            conn.commit()
+        finally:
+            conn.close()
+    _db_migrate()
+
+def _db_migrate():
+    """Import existing session JSON files not yet in the database. Idempotent."""
+    sessions_dir = storage_path() / "sessions"
+    if not sessions_dir.exists():
+        return
+    imported = 0
+    with _db_lock:
+        conn = _db_connect()
+        try:
+            for f in sorted(sessions_dir.glob("*.json")):
+                if f.name.endswith("_laps.json") or f.name.endswith("_analysis.json"):
+                    continue
+                try:
+                    data = json.loads(f.read_text())
+                    sid = data.get("session_id")
+                    if not sid:
+                        continue
+                    if conn.execute("SELECT 1 FROM sessions WHERE session_id=?", (sid,)).fetchone():
+                        continue
+                    ai_text = ai_at = ai_model = None
+                    af = sessions_dir / f"{sid}_analysis.json"
+                    if af.exists():
+                        try:
+                            a = json.loads(af.read_text())
+                            ai_text  = a.get("analysis")
+                            ai_at    = a.get("analyzed_at")
+                            ai_model = a.get("model")
+                        except Exception:
+                            pass
+                    laps = data.get("laps", [])
+                    conn.execute("""
+                        INSERT OR IGNORE INTO sessions
+                        (session_id,game,track,car,session_type,race_type,
+                         started_at,ended_at,packet_count,best_lap_time_s,lap_count,
+                         ai_analysis,ai_analyzed_at,ai_model)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """, (sid,
+                          data.get("game"), data.get("track"), data.get("car"),
+                          data.get("session_type"), data.get("race_type"),
+                          data.get("started_at"), data.get("ended_at"),
+                          data.get("packet_count", 0), data.get("best_lap_time_s"),
+                          len(laps), ai_text, ai_at, ai_model))
+                    for lap in laps:
+                        conn.execute("""
+                            INSERT INTO laps (session_id,lap_number,lap_time_s,max_speed_mph,sample_count)
+                            VALUES (?,?,?,?,?)
+                        """, (sid, lap.get("lap_number"), lap.get("lap_time_s"),
+                              lap.get("max_speed_mph"), lap.get("sample_count", 0)))
+                    imported += 1
+                except Exception as e:
+                    log.warning(f"DB migration: skipping {f.name}: {e}")
+            conn.commit()
+        finally:
+            conn.close()
+    if imported:
+        log.info(f"SQLite: migrated {imported} session(s) from JSON files")
+
+def _db_write_session(session_data: dict):
+    """Insert/replace a session and its lap summaries."""
+    sid  = session_data["session_id"]
+    laps = session_data.get("laps", [])
+    with _db_lock:
+        conn = _db_connect()
+        try:
+            conn.execute("""
+                INSERT OR REPLACE INTO sessions
+                (session_id,game,track,car,session_type,race_type,
+                 started_at,ended_at,packet_count,best_lap_time_s,lap_count)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, (sid,
+                  session_data.get("game"), session_data.get("track"),
+                  session_data.get("car"), session_data.get("session_type"),
+                  session_data.get("race_type"),
+                  session_data.get("started_at"), session_data.get("ended_at"),
+                  session_data.get("packet_count", 0), session_data.get("best_lap_time_s"),
+                  len(laps)))
+            conn.execute("DELETE FROM laps WHERE session_id=?", (sid,))
+            for lap in laps:
+                conn.execute("""
+                    INSERT INTO laps (session_id,lap_number,lap_time_s,max_speed_mph,sample_count)
+                    VALUES (?,?,?,?,?)
+                """, (sid, lap.get("lap_number"), lap.get("lap_time_s"),
+                      lap.get("max_speed_mph"), lap.get("sample_count", 0)))
+            conn.commit()
+        finally:
+            conn.close()
+
+def _db_sessions_list(limit: int = 100) -> list:
+    """Return sessions newest-first with embedded lap summaries."""
+    with _db_lock:
+        conn = _db_connect()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+            result = []
+            for row in rows:
+                s = dict(row)
+                lap_rows = conn.execute(
+                    "SELECT lap_number,lap_time_s,max_speed_mph,sample_count "
+                    "FROM laps WHERE session_id=? ORDER BY lap_number",
+                    (s["session_id"],)
+                ).fetchall()
+                s["laps"] = [dict(l) for l in lap_rows]
+                result.append(s)
+            return result
+        finally:
+            conn.close()
+
+def _db_update_session(sid: str, **kwargs):
+    """Update arbitrary columns on a session row."""
+    if not kwargs:
+        return
+    cols = ", ".join(f"{k}=?" for k in kwargs)
+    vals = list(kwargs.values()) + [sid]
+    with _db_lock:
+        conn = _db_connect()
+        try:
+            conn.execute(f"UPDATE sessions SET {cols} WHERE session_id=?", vals)
+            conn.commit()
+        finally:
+            conn.close()
+
+def _db_drop_last_lap(sid: str):
+    """Remove the last lap row and recalculate best_lap_time_s."""
+    with _db_lock:
+        conn = _db_connect()
+        try:
+            last = conn.execute(
+                "SELECT id FROM laps WHERE session_id=? ORDER BY lap_number DESC LIMIT 1",
+                (sid,)
+            ).fetchone()
+            if last:
+                conn.execute("DELETE FROM laps WHERE id=?", (last["id"],))
+                best = conn.execute(
+                    "SELECT MIN(lap_time_s) FROM laps WHERE session_id=? AND lap_time_s IS NOT NULL",
+                    (sid,)
+                ).fetchone()[0]
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM laps WHERE session_id=?", (sid,)
+                ).fetchone()[0]
+                conn.execute(
+                    "UPDATE sessions SET best_lap_time_s=?, lap_count=? WHERE session_id=?",
+                    (best, count, sid)
+                )
+                conn.commit()
+        finally:
+            conn.close()
+
+def _db_get_ai_analysis(sid: str) -> Optional[dict]:
+    """Return cached AI analysis from DB, or None if not yet analyzed."""
+    with _db_lock:
+        conn = _db_connect()
+        try:
+            row = conn.execute(
+                "SELECT ai_analysis,ai_analyzed_at,ai_model FROM sessions WHERE session_id=?",
+                (sid,)
+            ).fetchone()
+            if row and row["ai_analysis"]:
+                return {
+                    "session_id":  sid,
+                    "analysis":    row["ai_analysis"],
+                    "analyzed_at": row["ai_analyzed_at"],
+                    "model":       row["ai_model"],
+                    "cached":      True,
+                }
+            return None
+        finally:
+            conn.close()
+
+def _db_save_ai_analysis(sid: str, analysis: str, model: str):
+    """Persist AI analysis text to the sessions row."""
+    _db_update_session(sid,
+                       ai_analysis=analysis,
+                       ai_analyzed_at=datetime.now().isoformat(),
+                       ai_model=model)
+
 # ─── AI Analysis ──────────────────────────────────────────────────────────────
 
 import statistics as _statistics
@@ -2982,14 +3213,7 @@ async def handle_status(reader, writer):
             writer.write(_http_response("200 OK", "text/html", SESSIONS_HTML.encode()))
 
         elif path == "/sessions/data":
-            sessions_dir = storage_path() / "sessions"
-            files = sorted(sessions_dir.glob("*_[!l]*.json"))
-            result = []
-            for f in files[-100:]:
-                try:
-                    result.append(json.loads(f.read_text()))
-                except Exception:
-                    pass
+            result = _db_sessions_list(100)
             writer.write(_http_response("200 OK", "application/json", json.dumps(result).encode()))
 
         elif path == "/sessions/laps":
@@ -3040,6 +3264,16 @@ async def handle_status(reader, writer):
                             pass
 
                     session_file.write_text(json.dumps(session_data, indent=2))
+
+                    # Sync to SQLite
+                    db_kwargs = {}
+                    if "race_type" in body_data:
+                        db_kwargs["race_type"] = body_data["race_type"]
+                    if db_kwargs:
+                        _db_update_session(sid, **db_kwargs)
+                    if body_data.get("drop_last_lap"):
+                        _db_drop_last_lap(sid)
+
                     writer.write(_http_response("200 OK", "application/json",
                                                 json.dumps({"ok": True, "session": session_data}).encode()))
 
@@ -3053,7 +3287,11 @@ async def handle_status(reader, writer):
             analysis_file = sessions_dir / f"{sid}_analysis.json"
 
             # Serve cached result unless caller requests a fresh one
-            if not force and analysis_file.exists():
+            db_cached = _db_get_ai_analysis(sid)
+            if not force and db_cached:
+                writer.write(_http_response("200 OK", "application/json",
+                                            json.dumps(db_cached).encode()))
+            elif not force and analysis_file.exists():
                 writer.write(_http_response("200 OK", "application/json", analysis_file.read_bytes()))
             else:
                 try:
@@ -3093,6 +3331,8 @@ async def handle_status(reader, writer):
                             "analysis":    analysis,
                         }
                         analysis_file.write_text(json.dumps(result_obj, indent=2))
+                        _db_save_ai_analysis(sid, analysis,
+                                             config.get("anthropic_model", "claude-sonnet-4-6"))
                         writer.write(_http_response("200 OK", "application/json",
                                                     json.dumps(result_obj).encode()))
                     except ValueError as exc:
@@ -3233,6 +3473,7 @@ async def handle_status(reader, writer):
 
 async def main():
     ensure_storage()
+    _db_init()
     log.info("SimTelemetry listener starting...")
 
     loop = asyncio.get_event_loop()

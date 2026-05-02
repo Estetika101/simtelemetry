@@ -1,6 +1,8 @@
-# SimTelemetry Listener
+# SimTelemetry
 
-UDP telemetry capture for Forza Motorsport, ACC, and F1. Runs on Pi, Mac, Windows, Linux.
+UDP telemetry listener and live dashboard for Forza Motorsport, ACC, and F1. Captures every session automatically, serves live data to any device on your network, and archives raw packets for post-race analysis. Runs on a Raspberry Pi or any always-on machine.
+
+<!-- Add a screenshot of the live dashboard here -->
 
 ## Ports
 | Game | UDP Port |
