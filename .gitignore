@@ -9,3 +9,5 @@ logs/
 .DS_Store
 simtelemetry.config.json
 data/
+CLAUDE.md
+CHANGELOG.md
