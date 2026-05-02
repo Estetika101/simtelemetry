@@ -3257,7 +3257,7 @@ function setupInteraction(){
     tip.textContent=lines.join('\\n');
     tip.style.left=Math.min(e.clientX+14,window.innerWidth-180)+'px';
     tip.style.top=Math.max(8,e.clientY-tip.offsetHeight-8)+'px';
-    tip.style.display='';
+    tip.style.display='block';
     if(_dragging){
       const aRect=area.getBoundingClientRect();
       const x1=e.clientX-aRect.left;
