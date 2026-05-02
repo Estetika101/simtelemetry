@@ -1628,13 +1628,13 @@ async function openFinish(){
 
   if(!_foSid){ alert('No active session to finish.'); return; }
 
-  // Load laps
+  // Load session + laps
   try {
-    const sess = await fetch('/sessions/data').then(r=>r.json());
-    const cur = sess.find(s=>s.session_id===_foSid) || sess[sess.length-1];
+    const d = await fetch('/sessions/session/data?id='+encodeURIComponent(_foSid)).then(r=>r.json());
+    const cur = d.session;
     if(!cur){ closeFinish(); return; }
     _foSid = cur.session_id;
-    _foLaps = cur.laps || [];
+    _foLaps = d.laps || [];
 
     $('fo-title').textContent = cur.track&&cur.track!=='unknown' ? cur.track : 'Session Complete';
     $('fo-sub').textContent = (cur.game||'').replace(/_/g,' ') + (cur.started_at?' · '+new Date(cur.started_at).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'');
@@ -2127,7 +2127,7 @@ function toggleStream() {
 """
 
 
-SESSIONS_HTML = """<!DOCTYPE html>
+TRACKS_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -2135,114 +2135,30 @@ SESSIONS_HTML = """<!DOCTYPE html>
 <title>SimTelemetry &middot; Sessions</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;overflow:hidden}
-body{background:#000;color:#e0e0e0;font-family:'Courier New',monospace;display:flex;flex-direction:column;user-select:none}
-a{color:#aaa;text-decoration:none}a:hover{color:#fff}
-
-/* topbar */
-.tb{flex:none;height:50px;display:flex;align-items:center;padding:0 18px;gap:14px;border-bottom:1px solid #1e1e1e}
+body{background:#000;color:#e0e0e0;font-family:'Courier New',monospace;min-height:100vh}
+a{color:inherit;text-decoration:none}
+.tb{height:50px;display:flex;align-items:center;padding:0 18px;gap:14px;border-bottom:1px solid #1e1e1e;position:sticky;top:0;background:#000;z-index:10}
 .tb h1{font-size:1.3rem;color:#e0e0e0;letter-spacing:3px;text-transform:uppercase;flex:1}
-.tb-nav{display:flex;gap:14px;flex:none}
-.tb-nav a{font-size:.8rem;color:#666;text-decoration:none;letter-spacing:1px;text-transform:uppercase}
+.tb-nav{display:flex;gap:14px}
+.tb-nav a{font-size:.8rem;color:#666;letter-spacing:1px;text-transform:uppercase}
 .tb-nav a:hover{color:#ccc}
 .tb-nav a.cur{color:#e0e0e0;border-bottom:1px solid #888}
-
-/* layout */
-.layout{display:flex;flex:1;overflow:hidden;min-height:0}
-
-/* sidebar */
-.sidebar{width:270px;flex:none;border-right:1px solid #1a1a28;display:flex;flex-direction:column;overflow:hidden}
-.game-tabs{display:flex;flex:none;border-bottom:1px solid #1a1a28}
-.g-tab{flex:1;background:none;border:none;border-bottom:2px solid transparent;color:#777;font-family:inherit;font-size:.78rem;padding:10px 4px;cursor:pointer;letter-spacing:1px;text-transform:uppercase}
-.g-tab.active{color:#22c55e;border-bottom-color:#22c55e}
-.g-tab:hover:not(.active){color:#bbb}
-.session-list{flex:1;overflow-y:auto}
-.session-list::-webkit-scrollbar{width:3px}.session-list::-webkit-scrollbar-thumb{background:#1a1a2a}
-.s-item{padding:11px 14px;border-bottom:1px solid #111;cursor:pointer;border-left:2px solid transparent}
-.s-item:hover{background:#0e0e16}
-.s-item.active{background:#0a180e;border-left-color:#22c55e}
-.s-date{font-size:.72rem;color:#666;margin-bottom:2px}
-.s-track{font-size:.85rem;color:#ddd;font-weight:bold;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.s-meta{display:flex;gap:10px;font-size:.75rem;color:#777}
-.s-best{color:#22c55e99}
-.s-type{display:inline-block;font-size:.65rem;background:#22c55e18;border:1px solid #22c55e44;color:#22c55e;padding:1px 7px;border-radius:10px;margin-left:8px;letter-spacing:.5px;vertical-align:middle}
-.no-s{padding:24px;font-size:.8rem;color:#555;text-align:center}
-
-/* main area */
-.main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
-.sess-hdr{flex:none;padding:10px 20px;border-bottom:1px solid #1a1a28;display:none;align-items:center;gap:20px;flex-wrap:wrap}
-.hdr-title{font-size:.95rem;color:#e0e0e0;font-weight:bold;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.hdr-stat .v{font-size:1.1rem;color:#fff;font-weight:bold}
-.hdr-stat .l{font-size:.7rem;color:#777;text-transform:uppercase;letter-spacing:1px}
-
-/* detail tabs */
-.detail-tabs{flex:none;display:none;gap:0;border-bottom:1px solid #1a1a28}
-.d-tab{background:none;border:none;border-bottom:2px solid transparent;color:#777;font-family:inherit;font-size:.78rem;padding:9px 18px;cursor:pointer;letter-spacing:1px;text-transform:uppercase}
-.d-tab.active{color:#e0e0e0;border-bottom-color:#888}
-.d-tab:hover:not(.active){color:#bbb}
-
-/* results tab */
-.results-area{flex:1;overflow-y:auto;overflow-x:hidden;display:none}
-.results-area::-webkit-scrollbar{width:4px}.results-area::-webkit-scrollbar-thumb{background:#1a1a2a}
-
-/* stat cards grid */
-.cards-grid{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:#111;border-bottom:1px solid #111;padding:1px}
-.stat-card{background:#0a0a10;border:1px solid #111;padding:14px 16px;display:flex;flex-direction:column;gap:4px}
-.card-lbl{font-size:.72rem;color:#777;text-transform:uppercase;letter-spacing:2px}
-.card-val{font-size:1.35rem;font-weight:900;color:#fff;line-height:1.1}
-.card-val.green{color:#22c55e}
-
-/* lap pace chart */
-.pace-wrap{padding:16px 16px 8px;border-bottom:1px solid #111}
-.pace-title{font-size:.72rem;color:#777;text-transform:uppercase;letter-spacing:2px;margin-bottom:8px}
-#pace-canvas{display:block;cursor:default}
-
-/* lap table */
-.lap-table-wrap{padding:12px 16px 16px}
-.lap-table-title{font-size:.72rem;color:#777;text-transform:uppercase;letter-spacing:2px;margin-bottom:8px}
-table{width:100%;border-collapse:collapse;font-size:.8rem}
-th{color:#888;text-transform:uppercase;letter-spacing:1px;font-weight:normal;padding:5px 8px;text-align:left;border-bottom:1px solid #1e1e1e}
-td{padding:6px 8px;border-bottom:1px solid #0d0d14;color:#aaa}
-tr:hover td{background:#0a0a12}
-td.lap-num{color:#777}
-td.lap-time{color:#e0e0e0;font-weight:bold}
-td.lap-best{color:#22c55e;font-weight:bold}
-
-/* telemetry tab */
-.telem-area{flex:1;overflow:hidden;display:none;flex-direction:column}
-.lap-bar{flex:none;display:flex;align-items:center;gap:6px;padding:7px 16px;border-bottom:1px solid #111118;overflow-x:auto}
-.lap-bar::-webkit-scrollbar{height:3px}.lap-bar::-webkit-scrollbar-thumb{background:#2a2a3a}
-.l-chip{background:#141418;border:1px solid #2a2a30;color:#777;font-family:inherit;font-size:.72rem;padding:4px 10px;border-radius:3px;cursor:pointer;white-space:nowrap;flex:none}
-.l-chip.active{background:#0a180e;border-color:#22c55e44;color:#22c55e}
-.l-chip:hover:not(.active){color:#ccc;border-color:#3a3a4a}
-.chart-area{flex:1;overflow-y:auto;overflow-x:hidden}
-.chart-area::-webkit-scrollbar{width:4px}.chart-area::-webkit-scrollbar-thumb{background:#1a1a2a}
-.c-row{position:relative;border-bottom:1px solid #0a0a12}
-.c-lbl{position:absolute;top:5px;left:10px;font-size:.7rem;color:#555;text-transform:uppercase;letter-spacing:1px;pointer-events:none;z-index:1;display:flex;gap:6px;align-items:center}
-.c-lbl span{padding:1px 5px;border-radius:2px}
-canvas{display:block;cursor:crosshair}
-
-.empty{display:flex;align-items:center;justify-content:center;flex:1;font-size:.85rem;color:#444}
-#tip{position:fixed;background:#0a0a12;border:1px solid #2a2a3a;border-radius:4px;padding:8px 12px;font-size:.72rem;pointer-events:none;display:none;z-index:200;min-width:130px;line-height:1.8}
-.tr{display:flex;justify-content:space-between;gap:14px}
-.tk{color:#777}.tv{font-weight:bold}
-
-/* analysis tab */
-.analysis-area{flex:1;overflow-y:auto;display:none;flex-direction:column}
-.analysis-area::-webkit-scrollbar{width:4px}.analysis-area::-webkit-scrollbar-thumb{background:#1a1a2a}
-.analysis-inner{padding:24px 28px;max-width:720px}
-.btn-analyze{background:#22c55e;color:#000;border:none;font-family:inherit;font-size:.85rem;font-weight:bold;padding:10px 24px;border-radius:4px;cursor:pointer;letter-spacing:1px}
-.btn-analyze:hover{background:#16a34a}
-.btn-analyze:disabled{background:#1a3a1a;color:#2a6a2a;cursor:default}
-.btn-reanalyze{background:none;border:1px solid #2a2a3a;color:#666;font-family:inherit;font-size:.78rem;padding:8px 16px;border-radius:4px;cursor:pointer;letter-spacing:1px}
-.btn-reanalyze:hover{border-color:#555;color:#ccc}
-.btn-reanalyze:disabled{opacity:.4;cursor:default}
-.analysis-meta{font-size:.72rem;color:#555;letter-spacing:.5px}
-.analysis-meta.cached{color:#22c55e66}
-.analysis-body{font-size:.85rem;line-height:1.75;color:#ccc;white-space:pre-wrap;border-top:1px solid #1a1a28;padding-top:18px;display:none}
-.analysis-err{color:#ef4444;font-size:.8rem;margin-top:12px}
-.type-sel{background:#111;border:1px solid #222;color:#888;font-family:inherit;font-size:.78rem;padding:5px 10px;border-radius:4px;outline:none;cursor:pointer}
-.type-sel:hover{border-color:#444}
+.page{padding:24px}
+.page-hdr{display:flex;align-items:baseline;gap:16px;margin-bottom:24px}
+.page-hdr h2{font-size:1.1rem;color:#e0e0e0;letter-spacing:2px;text-transform:uppercase}
+.count{font-size:.78rem;color:#555}
+.tracks-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px}
+.tc{background:#060608;border:1px solid #1a1a1a;padding:18px 20px;cursor:pointer;transition:border-color .15s}
+.tc:hover{border-color:#2a2a3a;background:#08080e}
+.tc-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px}
+.tc-name{font-size:1rem;color:#e0e0e0;font-weight:bold;line-height:1.3;flex:1;margin-right:10px}
+.trend-up{color:#22c55e;font-size:1.1rem}.trend-dn{color:#ef4444;font-size:1.1rem}.trend-fl{color:#333;font-size:1.1rem}
+.tc-stats{display:flex;gap:20px;margin-bottom:10px}
+.tc-stat .v{font-size:1.1rem;font-weight:900;color:#fff}
+.tc-stat .l{font-size:.68rem;color:#666;text-transform:uppercase;letter-spacing:1px;margin-top:1px}
+.tc-tip{font-size:.78rem;color:#22c55e99;line-height:1.4;border-top:1px solid #111;padding-top:8px;margin-top:4px;display:none}
+.tc-tip.on{display:block}
+.empty-state{color:#333;font-size:.85rem;padding:48px 24px;text-align:center}
 </style>
 </head>
 <body>
@@ -2256,516 +2172,382 @@ canvas{display:block;cursor:crosshair}
   </nav>
 </div>
 <script>if(location.search.includes('debug=true'))document.getElementById('nav-admin').style.display='';</script>
-<div class="layout">
-  <div class="sidebar">
-    <div class="game-tabs">
-      <button class="g-tab active" onclick="setGame('forza_motorsport',this)">Forza</button>
-      <button class="g-tab" onclick="setGame('acc',this)">ACC</button>
-      <button class="g-tab" onclick="setGame('f1',this)">F1</button>
-    </div>
-    <div class="session-list" id="slist"><div class="no-s">Loading&hellip;</div></div>
-  </div>
-  <div class="main">
-    <div class="sess-hdr" id="shdr"></div>
-    <div class="detail-tabs" id="dtabs">
-      <button class="d-tab active" onclick="switchTab('results',this)">Results</button>
-      <button class="d-tab" onclick="switchTab('telemetry',this)">Telemetry</button>
-      <button class="d-tab" onclick="switchTab('analysis',this)">AI Analysis</button>
-    </div>
-    <div class="results-area" id="results-area">
-      <div class="cards-grid" id="cards-grid"></div>
-      <div class="pace-wrap">
-        <div class="pace-title">Lap Pace</div>
-        <canvas id="pace-canvas" height="160"></canvas>
-      </div>
-      <div class="lap-table-wrap">
-        <div class="lap-table-title">Lap Times</div>
-        <table id="lap-table">
-          <thead><tr><th>Lap</th><th>Time</th><th>Max Speed</th><th>Throttle%</th><th>Brake%</th><th>Peak RPM</th></tr></thead>
-          <tbody id="lap-tbody"></tbody>
-        </table>
-      </div>
-    </div>
-    <div class="telem-area" id="telem-area">
-      <div class="lap-bar" id="lbar"></div>
-      <div class="chart-area" id="carea"></div>
-    </div>
-    <div class="analysis-area" id="analysis-area">
-      <div class="analysis-inner" id="analysis-inner">
-        <div style="display:flex;align-items:center;gap:14px;margin-bottom:20px;flex-wrap:wrap">
-          <button class="btn-analyze" id="btn-analyze" onclick="runAnalysis(false)">Analyze with Claude</button>
-          <button class="btn-reanalyze" id="btn-reanalyze" onclick="runAnalysis(true)" style="display:none">Re-analyze</button>
-          <span class="analysis-meta" id="analysis-meta"></span>
-        </div>
-        <div class="analysis-body" id="analysis-body"></div>
-      </div>
-    </div>
-    <div class="empty" id="empty">Select a session</div>
-  </div>
+<div class="page">
+  <div class="page-hdr"><h2>Tracks</h2><span class="count" id="count"></span></div>
+  <div class="tracks-grid" id="grid"><div class="empty-state">Loading&hellip;</div></div>
 </div>
-<div id="tip"></div>
 <script>
-const PAD = {l:52,r:10,t:22,b:18};
-const ROWS = [
-  {id:'spd', label:'Speed',  h:130, zero:false,
-   ch:[{key:'speed_mph',  color:'#d4d4d4', lbl:'mph'}], ymin:0, ymax:'auto'},
-  {id:'ped', label:'Throttle / Brake', h:110, zero:false,
-   ch:[{key:'throttle_pct',color:'#22c55e',lbl:'thr'},
-       {key:'brake_pct',   color:'#ef4444',lbl:'brk'}], ymin:0, ymax:100},
-  {id:'rpm', label:'RPM',    h:100, zero:false,
-   ch:[{key:'rpm',         color:'#a78bfa',lbl:'rpm'}], ymin:0, ymax:'auto'},
-  {id:'gr',  label:'Gear',   h:80,  zero:false, stepped:true,
-   ch:[{key:'gear',        color:'#f59e0b',lbl:'gear'}], ymin:-1, ymax:8},
-  {id:'gl',  label:'G-Lat',  h:100, zero:true,
-   ch:[{key:'g_lat',       color:'#22d3ee',lbl:'g'}], ymin:'auto',ymax:'auto'},
-  {id:'gn',  label:'G-Lon',  h:100, zero:true,
-   ch:[{key:'g_lon',       color:'#fb923c',lbl:'g'}], ymin:'auto',ymax:'auto'},
-];
-
-let _game='forza_motorsport', _sessions=[], _cur=null, _laps=[], _lapIdx=0;
-let _charts=[], _hT=null, _activeTab='results';
-
-async function init() {
-  try { _sessions = await fetch('/sessions/data').then(r=>r.json()); }
-  catch(e) { _sessions=[]; }
-  renderList();
-}
-
-function setGame(g,el) {
-  _game=g;
-  document.querySelectorAll('.g-tab').forEach(t=>t.classList.remove('active'));
-  el.classList.add('active');
-  renderList();
-}
-
-function renderList() {
-  const el=document.getElementById('slist');
-  const list=[..._sessions].filter(s=>s.game===_game).reverse();
-  if(!list.length){el.innerHTML='<div class="no-s">No sessions</div>';return;}
-  el.innerHTML=list.map(s=>{
-    const dt=new Date(s.started_at).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
-    const best=s.best_lap_time_s?fmtLap(s.best_lap_time_s):'--:--.---';
-    const laps=(s.laps||[]).length;
-    const act=_cur&&_cur.session_id===s.session_id?'active':'';
-    const TYPE_LABELS = {practice:'Practice',time_trial:'Time Trial',qualifying:'Qualifying',race_ai:'Race vs AI',race_online:'Online Race',hot_lap:'Hot Lap'};
-    const typeBadge = s.race_type ? `<span class="s-type">${TYPE_LABELS[s.race_type]||s.race_type}</span>` : '';
-    return `<div class="s-item ${act}" onclick="pick('${s.session_id}')">
-      <div class="s-date">${dt}${typeBadge}</div>
-      <div class="s-track">${s.track&&s.track!=='unknown'?s.track:'Unknown Track'}</div>
-      <div class="s-meta"><span>${laps} lap${laps!==1?'s':''}</span><span class="s-best">${best}</span><span>${s.packet_count||0} pkt</span></div>
+function fmtLap(s){if(!s)return '—';const m=Math.floor(s/60);return m+':'+(s%60).toFixed(3).padStart(6,'0');}
+function fmtDate(iso){if(!iso)return '—';return new Date(iso).toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'});}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+let _tracks=[];
+async function init(){
+  try{_tracks=await fetch('/sessions/tracks').then(r=>r.json());}catch(e){_tracks=[];}
+  const grid=document.getElementById('grid');
+  document.getElementById('count').textContent=_tracks.length+' track'+(_tracks.length!==1?'s':'');
+  if(!_tracks.length){grid.innerHTML='<div class="empty-state">No sessions recorded yet</div>';return;}
+  grid.innerHTML=_tracks.map((t,i)=>{
+    const arrow=t.trend==='up'?'<span class="trend-up">▲</span>':t.trend==='dn'?'<span class="trend-dn">▼</span>':'<span class="trend-fl">—</span>';
+    return `<div class="tc" data-i="${i}">
+      <div class="tc-top"><div class="tc-name">${esc(t.track)}</div>${arrow}</div>
+      <div class="tc-stats">
+        <div class="tc-stat"><div class="v">${fmtLap(t.best_lap_time_s)}</div><div class="l">Best Lap</div></div>
+        <div class="tc-stat"><div class="v">${t.session_count}</div><div class="l">Sessions</div></div>
+        <div class="tc-stat"><div class="v">${fmtDate(t.last_raced)}</div><div class="l">Last Raced</div></div>
+      </div>
+      <div class="tc-tip" id="tip${i}"></div>
     </div>`;
   }).join('');
+  document.querySelectorAll('.tc').forEach((el,i)=>{
+    el.addEventListener('click',()=>location.href='/sessions/track?name='+encodeURIComponent(_tracks[i].track));
+    loadTip(_tracks[i].track,i);
+  });
 }
+async function loadTip(track,i){
+  try{
+    const d=await fetch('/sessions/track/tip?name='+encodeURIComponent(track)).then(r=>r.json());
+    if(d&&d.tip){const el=document.getElementById('tip'+i);if(el){el.textContent=d.tip;el.classList.add('on');}}
+  }catch(e){}
+}
+init();
+</script>
+</body>
+</html>
+"""
 
-async function pick(id) {
-  _cur=_sessions.find(s=>s.session_id===id);
-  renderList();
-  try { _laps=await fetch('/sessions/laps?id='+id).then(r=>r.json()); }
-  catch(e){_laps=[];}
-  _lapIdx=0;
-  // reset analysis panel for new session
-  document.getElementById('analysis-body').style.display='none';
-  document.getElementById('analysis-body').textContent='';
-  document.getElementById('btn-analyze').textContent='Analyze with Claude';
-  document.getElementById('btn-analyze').disabled=false;
-  document.getElementById('btn-analyze').style.display='inline-block';
-  document.getElementById('btn-reanalyze').style.display='none';
-  document.getElementById('analysis-meta').textContent='';
-  document.getElementById('analysis-meta').className='analysis-meta';
-  const prevErr=document.getElementById('analysis-err'); if(prevErr) prevErr.remove();
+TRACK_DETAIL_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>SimTelemetry &middot; Track</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#000;color:#e0e0e0;font-family:'Courier New',monospace;min-height:100vh}
+a{color:inherit;text-decoration:none}
+.tb{height:50px;display:flex;align-items:center;padding:0 18px;gap:14px;border-bottom:1px solid #1e1e1e;position:sticky;top:0;background:#000;z-index:10}
+.tb h1{font-size:1.3rem;color:#e0e0e0;letter-spacing:3px;text-transform:uppercase;flex:1}
+.tb-nav{display:flex;gap:14px}
+.tb-nav a{font-size:.8rem;color:#666;letter-spacing:1px;text-transform:uppercase}
+.tb-nav a:hover{color:#ccc}
+.tb-nav a.cur{color:#e0e0e0;border-bottom:1px solid #888}
+.breadcrumb{font-size:.78rem;color:#555;padding:10px 20px;border-bottom:1px solid #111}
+.breadcrumb a{color:#444}.breadcrumb a:hover{color:#888}
+.track-hdr{padding:20px 24px;border-bottom:1px solid #111;display:flex;align-items:center;flex-wrap:wrap;gap:24px}
+.track-name{font-size:1.4rem;font-weight:900;color:#e0e0e0;letter-spacing:1px;flex:1}
+.hdr-stat{text-align:center}
+.hdr-stat .v{font-size:1.2rem;font-weight:900;color:#fff}
+.hdr-stat .l{font-size:.68rem;color:#666;text-transform:uppercase;letter-spacing:1px}
+.track-tip-bar{padding:10px 24px;background:#060809;border-bottom:1px solid #0e0e0e;font-size:.82rem;color:#22c55e99;display:none;align-items:center;gap:12px}
+.track-tip-bar.on{display:flex}
+.tip-gen{background:none;border:1px solid #1a3a1a;color:#22c55e55;font-family:inherit;font-size:.72rem;padding:3px 10px;cursor:pointer;border-radius:2px;flex-shrink:0}
+.tip-gen:hover{border-color:#22c55e44;color:#22c55e88}
+.page{padding:20px 24px}
+table{width:100%;border-collapse:collapse;font-size:.82rem}
+th{color:#666;text-transform:uppercase;letter-spacing:1px;font-weight:normal;padding:6px 10px;text-align:left;border-bottom:1px solid #1a1a1a;white-space:nowrap}
+td{padding:8px 10px;border-bottom:1px solid #0d0d0d;color:#aaa;vertical-align:middle}
+tr.clickable{cursor:pointer}
+tr.clickable:hover td{background:#08080e}
+td.best-time{color:#22c55e;font-weight:bold}
+td.date-col{color:#e0e0e0}
+.type-chip{font-size:.65rem;background:#22c55e18;border:1px solid #22c55e44;color:#22c55e;padding:1px 7px;border-radius:10px;letter-spacing:.5px}
+.empty-state{color:#333;font-size:.85rem;padding:48px 24px;text-align:center}
+</style>
+</head>
+<body>
+<div class="tb">
+  <h1>SimTelemetry</h1>
+  <nav class="tb-nav">
+    <a href="/">Live</a>
+    <a href="/sessions" class="cur">Sessions</a>
+    <a href="/setup">Setup</a>
+    <a href="/admin" id="nav-admin" style="display:none">Admin</a>
+  </nav>
+</div>
+<script>if(location.search.includes('debug=true'))document.getElementById('nav-admin').style.display='';</script>
+<div class="breadcrumb"><a href="/sessions">Sessions</a> &rsaquo; <span id="bc-track">Track</span></div>
+<div class="track-hdr">
+  <div class="track-name" id="hdr-name">Loading&hellip;</div>
+  <div class="hdr-stat"><div class="v" id="hdr-best">&mdash;</div><div class="l">Best Lap</div></div>
+  <div class="hdr-stat"><div class="v" id="hdr-count">&mdash;</div><div class="l">Sessions</div></div>
+  <div class="hdr-stat"><div class="v" id="hdr-trend">&mdash;</div><div class="l">Trend</div></div>
+</div>
+<div class="track-tip-bar" id="tip-bar">
+  <span id="tip-text"></span>
+  <button class="tip-gen" id="tip-btn" onclick="generateTip()">Generate AI tip</button>
+</div>
+<div class="page">
+  <table id="sess-table" style="display:none">
+    <thead><tr><th>Date</th><th>Type</th><th>Best Lap</th><th>Laps</th><th>Pace</th></tr></thead>
+    <tbody id="sess-tbody"></tbody>
+  </table>
+  <div class="empty-state" id="empty" style="display:none">No sessions at this track</div>
+</div>
+<script>
+const TYPE_LABELS={practice:'Practice',time_trial:'Time Trial',qualifying:'Qualifying',race_ai:'Race vs AI',race_online:'Online Race',hot_lap:'Hot Lap'};
+function fmtLap(s){if(!s)return '—';const m=Math.floor(s/60);return m+':'+(s%60).toFixed(3).padStart(6,'0');}
+function fmtDt(iso){if(!iso)return '—';return new Date(iso).toLocaleString([],{month:'short',day:'numeric',year:'2-digit',hour:'2-digit',minute:'2-digit'});}
+function spark(times){
+  const v=(times||[]).filter(t=>t>0);
+  if(v.length<2)return '<span style="color:#1a1a1a">—</span>';
+  const mn=Math.min(...v),mx=Math.max(...v),W=80,H=26,p=2;
+  const xf=i=>p+i/(v.length-1)*(W-p*2);
+  const yf=t=>H-p-(mx===mn?(H-p*2)/2:(t-mn)/(mx-mn)*(H-p*2));
+  const pts=v.map((t,i)=>xf(i).toFixed(1)+','+yf(t).toFixed(1)).join(' ');
+  const best=Math.min(...v);
+  const dots=v.map((t,i)=>Math.abs(t-best)<0.001?`<circle cx="${xf(i).toFixed(1)}" cy="${yf(t).toFixed(1)}" r="2" fill="#22c55e"/>`:``).join('');
+  return `<svg width="${W}" height="${H}" style="vertical-align:middle"><polyline points="${pts}" fill="none" stroke="#22c55e66" stroke-width="1.5" stroke-linejoin="round"/>${dots}</svg>`;
+}
+const _track=new URLSearchParams(location.search).get('name')||'';
+let _sessions=[];
+async function init(){
+  if(!_track){location.href='/sessions';return;}
+  document.getElementById('bc-track').textContent=_track;
+  document.title='SimTelemetry · '+_track;
+  try{_sessions=await fetch('/sessions/track/data?name='+encodeURIComponent(_track)).then(r=>r.json());}catch(e){_sessions=[];}
   renderHeader();
-  document.getElementById('empty').style.display='none';
-  document.getElementById('shdr').style.display='flex';
-  document.getElementById('dtabs').style.display='flex';
-  switchTab('results', document.querySelector('.d-tab.active')||document.querySelectorAll('.d-tab')[0]);
+  renderTable();
+  loadTip();
 }
-
-function switchTab(tab, el) {
-  _activeTab=tab;
-  document.querySelectorAll('.d-tab').forEach(t=>t.classList.remove('active'));
-  if(el) el.classList.add('active');
-  const ra=document.getElementById('results-area');
-  const ta=document.getElementById('telem-area');
-  const aa=document.getElementById('analysis-area');
-  ra.style.display='none'; ta.style.display='none'; aa.style.display='none';
-  if(tab==='results'){
-    ra.style.display='block';
-    if(_cur) renderResults();
-  } else if(tab==='telemetry'){
-    ta.style.display='flex';
-    if(_cur) { renderLapBar(); renderCharts(); }
-  } else if(tab==='analysis'){
-    aa.style.display='flex';
-    if(_cur) loadAnalysis(_cur.session_id, false);
+function renderHeader(){
+  document.getElementById('hdr-name').textContent=_track;
+  const allBest=_sessions.map(s=>s.best_lap_time_s).filter(v=>v);
+  document.getElementById('hdr-best').textContent=allBest.length?fmtLap(Math.min(...allBest)):'—';
+  document.getElementById('hdr-count').textContent=_sessions.length;
+  const last3=_sessions.slice(0,3).map(s=>s.best_lap_time_s).filter(v=>v);
+  let trendHtml='—';
+  if(last3.length>=2){
+    const d=last3[0]-last3[1];
+    trendHtml=d<-0.5?'<span style="color:#22c55e">▲ Improving</span>':d>0.5?'<span style="color:#ef4444">▼ Declining</span>':'<span style="color:#555">Stable</span>';
   }
+  document.getElementById('hdr-trend').innerHTML=trendHtml;
 }
-
-async function loadAnalysis(sid, force) {
-  const btn  = document.getElementById('btn-analyze');
-  const rbtn = document.getElementById('btn-reanalyze');
-  const body = document.getElementById('analysis-body');
-  const meta = document.getElementById('analysis-meta');
-  const errEl = document.getElementById('analysis-err');
-  if(errEl) errEl.remove();
-
-  const url = '/analyze?id='+encodeURIComponent(sid)+(force?'&force=true':'');
-  btn.disabled=true; rbtn.disabled=true;
-  if(force){ rbtn.textContent='Analyzing…'; } else { btn.textContent='Checking…'; }
-
-  try {
-    const r = await fetch(url);
-    const d = await r.json();
-    if(!r.ok) throw new Error(d.error||'Unknown error');
-    body.textContent = d.analysis;
-    body.style.display = 'block';
-    btn.style.display = 'none';
-    rbtn.style.display = 'inline-block';
-    rbtn.textContent = 'Re-analyze';
-    rbtn.disabled = false;
-    if(d.analyzed_at) {
-      const dt = new Date(d.analyzed_at).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
-      meta.textContent = 'Analyzed '+dt+(d.model?' · '+d.model:'');
-      meta.className = 'analysis-meta cached';
+function renderTable(){
+  if(!_sessions.length){document.getElementById('empty').style.display='block';return;}
+  document.getElementById('sess-table').style.display='';
+  const allBests=_sessions.map(s=>s.best_lap_time_s).filter(v=>v);
+  const globalBest=allBests.length?Math.min(...allBests):null;
+  document.getElementById('sess-tbody').innerHTML=_sessions.map(s=>{
+    const isGB=globalBest&&s.best_lap_time_s&&Math.abs(s.best_lap_time_s-globalBest)<0.001;
+    const typeHtml=s.race_type?`<span class="type-chip">${TYPE_LABELS[s.race_type]||s.race_type}</span>`:'';
+    return `<tr class="clickable" data-id="${s.session_id}">
+      <td class="date-col">${fmtDt(s.started_at)}</td>
+      <td>${typeHtml}</td>
+      <td class="${isGB?'best-time':''}">${fmtLap(s.best_lap_time_s)}</td>
+      <td>${s.lap_count||0}</td>
+      <td>${spark(s.lap_times)}</td>
+    </tr>`;
+  }).join('');
+  document.querySelectorAll('#sess-tbody tr').forEach((tr,i)=>{
+    tr.addEventListener('click',()=>location.href='/sessions/session?id='+encodeURIComponent(_sessions[i].session_id));
+  });
+}
+async function loadTip(){
+  try{
+    const d=await fetch('/sessions/track/tip?name='+encodeURIComponent(_track)).then(r=>r.json());
+    document.getElementById('tip-bar').classList.add('on');
+    if(d&&d.tip){
+      document.getElementById('tip-text').textContent=d.tip;
+      document.getElementById('tip-btn').style.display='none';
     }
-  } catch(e) {
-    body.style.display='none';
-    btn.disabled=false; btn.textContent='Analyze with Claude'; btn.style.display='inline-block';
-    rbtn.disabled=false; rbtn.style.display='none';
-    meta.textContent=''; meta.className='analysis-meta';
-    const err = document.createElement('div');
-    err.id='analysis-err'; err.className='analysis-err';
-    err.textContent='✗ '+e.message;
-    document.getElementById('analysis-inner').appendChild(err);
-  }
+  }catch(e){}
 }
-
-async function runAnalysis(force) {
-  if(_cur) loadAnalysis(_cur.session_id, !!force);
+async function generateTip(){
+  const btn=document.getElementById('tip-btn');
+  btn.textContent='Generating…';btn.disabled=true;
+  try{
+    const d=await fetch('/sessions/track/tip?name='+encodeURIComponent(_track)+'&generate=true').then(r=>r.json());
+    if(d&&d.tip){document.getElementById('tip-text').textContent=d.tip;btn.style.display='none';}
+    else{btn.textContent='Generate AI tip';btn.disabled=false;}
+  }catch(e){btn.textContent='Error — retry';btn.disabled=false;}
 }
+init();
+</script>
+</body>
+</html>
+"""
 
-const TYPE_LABELS = {practice:'Practice',time_trial:'Time Trial',qualifying:'Qualifying',race_ai:'Race vs AI',race_online:'Online Race',hot_lap:'Hot Lap'};
-function renderHeader() {
-  const s=_cur;
-  const best=s.best_lap_time_s?fmtLap(s.best_lap_time_s):'—';
-  const dt=new Date(s.started_at).toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
-  const typeOpts = ['','practice','time_trial','qualifying','race_ai','race_online','hot_lap']
-    .map(v=>v?`<option value="${v}"${s.race_type===v?' selected':''}>${TYPE_LABELS[v]}</option>`
-             :`<option value=""${!s.race_type?' selected':''}>— Type —</option>`).join('');
-  document.getElementById('shdr').innerHTML=`
-    <div class="hdr-title">${s.track&&s.track!=='unknown'?s.track:'Unknown Track'}&nbsp;&middot;&nbsp;${(s.game||'').replace(/_/g,' ')}</div>
-    <div class="hdr-stat"><div class="v">${best}</div><div class="l">Best Lap</div></div>
-    <div class="hdr-stat"><div class="v">${(_laps||[]).length}</div><div class="l">Laps</div></div>
-    <select class="type-sel" onchange="setType(this.value)">${typeOpts}</select>`;
+SESSION_DETAIL_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>SimTelemetry &middot; Session</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#000;color:#e0e0e0;font-family:'Courier New',monospace;min-height:100vh}
+a{color:inherit;text-decoration:none}
+.tb{height:50px;display:flex;align-items:center;padding:0 18px;gap:14px;border-bottom:1px solid #1e1e1e;position:sticky;top:0;background:#000;z-index:10}
+.tb h1{font-size:1.3rem;color:#e0e0e0;letter-spacing:3px;text-transform:uppercase;flex:1}
+.tb-nav{display:flex;gap:14px}
+.tb-nav a{font-size:.8rem;color:#666;letter-spacing:1px;text-transform:uppercase}
+.tb-nav a:hover{color:#ccc}
+.tb-nav a.cur{color:#e0e0e0;border-bottom:1px solid #888}
+.breadcrumb{font-size:.78rem;color:#555;padding:10px 20px;border-bottom:1px solid #111}
+.breadcrumb a{color:#444}.breadcrumb a:hover{color:#888}
+.sess-hdr{padding:18px 24px;border-bottom:1px solid #111;display:flex;align-items:center;flex-wrap:wrap;gap:24px}
+.sess-title{font-size:1.2rem;font-weight:900;color:#e0e0e0;flex:1}
+.sess-sub{font-size:.78rem;color:#555;margin-top:3px}
+.hdr-stat .v{font-size:1.1rem;font-weight:900;color:#fff}
+.hdr-stat .l{font-size:.68rem;color:#666;text-transform:uppercase;letter-spacing:1px}
+.type-chip{font-size:.65rem;background:#22c55e18;border:1px solid #22c55e44;color:#22c55e;padding:1px 8px;border-radius:10px;letter-spacing:.5px}
+.section{padding:20px 24px}
+.section-lbl{font-size:.72rem;color:#666;text-transform:uppercase;letter-spacing:2px;margin-bottom:12px}
+table{width:100%;border-collapse:collapse;font-size:.8rem}
+th{color:#666;text-transform:uppercase;letter-spacing:1px;font-weight:normal;padding:6px 10px;text-align:right;border-bottom:1px solid #1a1a1a;white-space:nowrap}
+th:first-child{text-align:left}
+td{padding:7px 10px;border-bottom:1px solid #0d0d0d;color:#aaa;text-align:right}
+td:first-child{text-align:left;color:#555}
+tr.best-row td{color:#22c55e}
+tr.best-row td:first-child{color:#22c55e88}
+.warn{color:#f59e0b}.crit{color:#ef4444}
+.ai-section{padding:20px 24px;border-top:1px solid #111;max-width:760px}
+.ai-lbl{font-size:.72rem;color:#666;text-transform:uppercase;letter-spacing:2px;margin-bottom:14px}
+.btn-analyze{background:#22c55e;color:#000;border:none;font-family:inherit;font-size:.85rem;font-weight:bold;padding:10px 24px;border-radius:4px;cursor:pointer;letter-spacing:1px}
+.btn-analyze:hover{background:#16a34a}
+.btn-analyze:disabled{background:#1a3a1a;color:#2a6a2a;cursor:default}
+.btn-re{background:none;border:1px solid #2a2a3a;color:#666;font-family:inherit;font-size:.78rem;padding:8px 16px;border-radius:4px;cursor:pointer;letter-spacing:1px;margin-left:10px}
+.btn-re:hover{border-color:#555;color:#ccc}
+.btn-re:disabled{opacity:.4;cursor:default}
+.ai-meta{font-size:.72rem;color:#555;margin-left:12px}
+.ai-body{font-size:.85rem;line-height:1.75;color:#ccc;white-space:pre-wrap;margin-top:18px;padding-top:18px;border-top:1px solid #1a1a28;display:none}
+.ai-err{color:#ef4444;font-size:.8rem;margin-top:12px;display:none}
+</style>
+</head>
+<body>
+<div class="tb">
+  <h1>SimTelemetry</h1>
+  <nav class="tb-nav">
+    <a href="/">Live</a>
+    <a href="/sessions" class="cur">Sessions</a>
+    <a href="/setup">Setup</a>
+    <a href="/admin" id="nav-admin" style="display:none">Admin</a>
+  </nav>
+</div>
+<script>if(location.search.includes('debug=true'))document.getElementById('nav-admin').style.display='';</script>
+<div class="breadcrumb">
+  <a href="/sessions">Sessions</a> &rsaquo;
+  <a href="#" id="bc-track">Track</a> &rsaquo;
+  <span id="bc-sess">Session</span>
+</div>
+<div class="sess-hdr">
+  <div>
+    <div class="sess-title" id="hdr-track">Loading&hellip;</div>
+    <div class="sess-sub" id="hdr-sub"></div>
+  </div>
+  <div class="hdr-stat"><div class="v" id="hdr-best">&mdash;</div><div class="l">Best Lap</div></div>
+  <div class="hdr-stat"><div class="v" id="hdr-laps">&mdash;</div><div class="l">Laps</div></div>
+  <span class="type-chip" id="hdr-type" style="display:none"></span>
+</div>
+<div class="section">
+  <div class="section-lbl">Lap Times</div>
+  <table>
+    <thead><tr>
+      <th>Lap</th>
+      <th>Time</th>
+      <th>Max Spd</th>
+      <th>Thr%</th>
+      <th>Brk%</th>
+      <th>Avg Slip</th>
+      <th>Peak Slip</th>
+      <th>Slip&gt;0.1%</th>
+    </tr></thead>
+    <tbody id="lap-tbody"></tbody>
+  </table>
+</div>
+<div class="ai-section">
+  <div class="ai-lbl">AI Coaching</div>
+  <div>
+    <button class="btn-analyze" id="btn-analyze" onclick="runAnalysis(false)">Analyze with Claude</button>
+    <button class="btn-re" id="btn-re" onclick="runAnalysis(true)" style="display:none">Re-analyze</button>
+    <span class="ai-meta" id="ai-meta"></span>
+  </div>
+  <div class="ai-body" id="ai-body"></div>
+  <div class="ai-err" id="ai-err"></div>
+</div>
+<script>
+const TYPE_LABELS={practice:'Practice',time_trial:'Time Trial',qualifying:'Qualifying',race_ai:'Race vs AI',race_online:'Online Race',hot_lap:'Hot Lap'};
+function fmtLap(s){if(!s)return '—';const m=Math.floor(s/60);return m+':'+(s%60).toFixed(3).padStart(6,'0');}
+function fmtDt(iso){if(!iso)return '—';return new Date(iso).toLocaleString([],{weekday:'short',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});}
+function scls(v){return v>0.25?'crit':v>0.12?'warn':'';}
+const _id=new URLSearchParams(location.search).get('id')||'';
+let _sess=null,_laps=[];
+async function init(){
+  if(!_id){location.href='/sessions';return;}
+  let d;
+  try{d=await fetch('/sessions/session/data?id='+encodeURIComponent(_id)).then(r=>r.json());}
+  catch(e){document.getElementById('hdr-track').textContent='Session not found';return;}
+  _sess=d.session;_laps=d.laps||[];
+  renderHeader();
+  renderLaps();
+  renderAI();
 }
-async function setType(val){
-  if(!_cur) return;
-  _cur.race_type = val||null;
-  await fetch('/sessions/update',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({id:_cur.session_id,race_type:val||null})});
-  renderList();
+function renderHeader(){
+  const s=_sess;
+  const track=s.track&&s.track!=='unknown'?s.track:'Unknown Track';
+  document.title='SimTelemetry · '+track;
+  document.getElementById('bc-track').textContent=track;
+  document.getElementById('bc-track').href='/sessions/track?name='+encodeURIComponent(track);
+  document.getElementById('bc-sess').textContent=fmtDt(s.started_at);
+  document.getElementById('hdr-track').textContent=track;
+  document.getElementById('hdr-sub').textContent=(s.game||'').replace(/_/g,' ')+' · '+fmtDt(s.started_at);
+  document.getElementById('hdr-best').textContent=fmtLap(s.best_lap_time_s);
+  document.getElementById('hdr-laps').textContent=_laps.length;
+  if(s.race_type){const el=document.getElementById('hdr-type');el.textContent=TYPE_LABELS[s.race_type]||s.race_type;el.style.display='';}
 }
-
-function renderResults() {
-  if(!_cur) return;
-  const s=_cur;
-  const laps=_laps||[];
-
-  // gather all samples
-  const allSamples=laps.flatMap(l=>l.samples||[]);
-
-  // compute stats
-  const lapCount=laps.length;
-  const best=s.best_lap_time_s;
-  const times=laps.map(l=>l.lap_time_s).filter(v=>v!=null&&v>0);
-  const avgLap=times.length?times.reduce((a,b)=>a+b,0)/times.length:null;
-  const worstLap=times.length?Math.max(...times):null;
-
-  let dur='—';
-  if(s.started_at&&s.ended_at){
-    const ds=(new Date(s.ended_at)-new Date(s.started_at))/1000;
-    const dm=Math.floor(ds/60);
-    dur=dm+'m '+Math.round(ds%60)+'s';
-  }
-
-  const maxSpd=allSamples.length?Math.max(...allSamples.map(ss=>ss.speed_mph||0)):null;
-  const avgSpd=allSamples.length?allSamples.reduce((a,ss)=>a+(ss.speed_mph||0),0)/allSamples.length:null;
-  const peakRpm=allSamples.length?Math.max(...allSamples.map(ss=>ss.rpm||0)):null;
-  const thrPct=allSamples.length?allSamples.filter(ss=>(ss.throttle_pct||0)>95).length/allSamples.length*100:null;
-  const brkPct=allSamples.length?allSamples.filter(ss=>(ss.brake_pct||0)>10).length/allSamples.length*100:null;
-
-  const cards=[
-    {lbl:'Laps', val:lapCount, cls:''},
-    {lbl:'Best Lap', val:best?fmtLap(best):'—', cls:'green'},
-    {lbl:'Session Duration', val:dur, cls:''},
-    {lbl:'Average Lap', val:avgLap?fmtLap(avgLap):'—', cls:''},
-    {lbl:'Worst Lap', val:worstLap?fmtLap(worstLap):'—', cls:''},
-    {lbl:'Max Speed', val:maxSpd!=null?maxSpd.toFixed(1)+' mph':'—', cls:''},
-    {lbl:'Full Throttle %', val:thrPct!=null?thrPct.toFixed(1)+'%':'—', cls:''},
-    {lbl:'Brake %', val:brkPct!=null?brkPct.toFixed(1)+'%':'—', cls:''},
-    {lbl:'Peak RPM', val:peakRpm!=null?Math.round(peakRpm).toLocaleString():'—', cls:''},
-    {lbl:'Avg Speed', val:avgSpd!=null?avgSpd.toFixed(1)+' mph':'—', cls:''},
-  ];
-  document.getElementById('cards-grid').innerHTML=cards.map(c=>
-    `<div class="stat-card"><div class="card-lbl">${c.lbl}</div><div class="card-val ${c.cls}">${c.val}</div></div>`
-  ).join('');
-
-  // lap pace chart
-  drawPaceChart(laps);
-
-  // lap table
-  const tbody=document.getElementById('lap-tbody');
-  const bestTime=best;
-  tbody.innerHTML=laps.map(lap=>{
-    const smp=lap.samples||[];
-    const thrP=smp.length?smp.filter(ss=>(ss.throttle_pct||0)>95).length/smp.length*100:null;
-    const brkP=smp.length?smp.filter(ss=>(ss.brake_pct||0)>10).length/smp.length*100:null;
-    const pkRpm=smp.length?Math.max(...smp.map(ss=>ss.rpm||0)):null;
-    const isB=bestTime&&lap.lap_time_s&&Math.abs(lap.lap_time_s-bestTime)<0.001;
-    const tClass=isB?'lap-best':'lap-time';
-    return `<tr>
-      <td class="lap-num">${lap.lap_number}</td>
-      <td class="${tClass}">${lap.lap_time_s?fmtLap(lap.lap_time_s):'—'}</td>
-      <td>${lap.max_speed_mph!=null?lap.max_speed_mph.toFixed(1)+' mph':'—'}</td>
-      <td>${thrP!=null?thrP.toFixed(1)+'%':'—'}</td>
-      <td>${brkP!=null?brkP.toFixed(1)+'%':'—'}</td>
-      <td>${pkRpm!=null?Math.round(pkRpm).toLocaleString():'—'}</td>
+function renderLaps(){
+  const best=_sess.best_lap_time_s;
+  document.getElementById('lap-tbody').innerHTML=_laps.map(l=>{
+    const isB=best&&l.lap_time_s&&Math.abs(l.lap_time_s-best)<0.001;
+    return `<tr class="${isB?'best-row':''}">
+      <td>${l.lap_number}</td>
+      <td>${fmtLap(l.lap_time_s)}</td>
+      <td>${l.max_speed_mph!=null?l.max_speed_mph.toFixed(1)+' mph':'—'}</td>
+      <td>${l.avg_throttle!=null?l.avg_throttle.toFixed(1)+'%':'—'}</td>
+      <td>${l.avg_brake!=null?l.avg_brake.toFixed(1)+'%':'—'}</td>
+      <td class="${scls(l.avg_slip||0)}">${l.avg_slip!=null?l.avg_slip.toFixed(4):'—'}</td>
+      <td class="${scls(l.peak_slip||0)}">${l.peak_slip!=null?l.peak_slip.toFixed(4):'—'}</td>
+      <td>${l.slip_above_pct!=null?l.slip_above_pct.toFixed(1)+'%':'—'}</td>
     </tr>`;
   }).join('');
 }
-
-function drawPaceChart(laps) {
-  const cv=document.getElementById('pace-canvas');
-  const wrap=cv.parentElement;
-  const dpr=window.devicePixelRatio||1;
-  const W=wrap.clientWidth||600;
-  cv.width=W*dpr; cv.style.width=W+'px';
-  cv.height=160*dpr; cv.style.height='160px';
-
-  const ctx=cv.getContext('2d');
-  const l=PAD.l, r=PAD.r, t=PAD.t, b=PAD.b;
-  const ox=l*dpr, oy=t*dpr, pw=W*dpr-(l+r)*dpr, ph=160*dpr-(t+b)*dpr;
-
-  ctx.clearRect(0,0,cv.width,cv.height);
-  ctx.fillStyle='#050508'; ctx.fillRect(0,0,cv.width,cv.height);
-
-  const pts=laps.filter(la=>la.lap_time_s&&la.lap_time_s>0);
-  if(pts.length===0) return;
-
-  const times=pts.map(la=>la.lap_time_s);
-  let yMin=Math.min(...times), yMax=Math.max(...times);
-  const pad=(yMax-yMin)*0.2||2;
-  yMin-=pad; yMax+=pad;
-  if(yMin===yMax){yMin-=1;yMax+=1;}
-
-  // grid
-  for(let i=0;i<=3;i++){
-    const gy=oy+ph*(1-i/3);
-    ctx.strokeStyle='#0e0e18'; ctx.lineWidth=1;
-    ctx.beginPath(); ctx.moveTo(ox,gy); ctx.lineTo(ox+pw,gy); ctx.stroke();
-    const val=yMin+(yMax-yMin)*(i/3);
-    ctx.fillStyle='#2a2a3a'; ctx.font=`${8.5*dpr}px "Courier New",monospace`; ctx.textAlign='right';
-    ctx.fillText(fmtLap(val),(l-4)*dpr,gy+3*dpr);
-  }
-
-  const N=pts.length;
-  const xOf=i=>ox+(N===1?pw/2:(i/(N-1))*pw);
-  const yOf=t=>oy+ph*(1-(t-yMin)/(yMax-yMin));
-
-  const bestT=Math.min(...times);
-
-  // line
-  ctx.strokeStyle='#d4d4d488'; ctx.lineWidth=1.5*dpr; ctx.lineJoin='round';
-  ctx.beginPath();
-  pts.forEach((la,i)=>{
-    const x=xOf(i), y=yOf(la.lap_time_s);
-    i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
-  });
-  ctx.stroke();
-
-  // dots + labels
-  pts.forEach((la,i)=>{
-    const x=xOf(i), y=yOf(la.lap_time_s);
-    const isBest=Math.abs(la.lap_time_s-bestT)<0.001;
-    ctx.fillStyle=isBest?'#22c55e':'#d4d4d4';
-    ctx.beginPath(); ctx.arc(x,y,3*dpr,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle=isBest?'#22c55e':'#888';
-    ctx.font=`${7.5*dpr}px "Courier New",monospace`; ctx.textAlign='center';
-    ctx.fillText(fmtLap(la.lap_time_s), x, y-(6*dpr));
-    // x-axis label
-    ctx.fillStyle='#333'; ctx.font=`${7*dpr}px "Courier New",monospace`;
-    ctx.fillText('L'+la.lap_number, x, oy+ph+(b-3)*dpr);
-  });
-}
-
-function renderLapBar() {
-  document.getElementById('lbar').innerHTML=_laps.map((lap,i)=>{
-    const t=lap.lap_time_s?fmtLap(lap.lap_time_s):'—';
-    return `<button class="l-chip ${i===_lapIdx?'active':''}" onclick="selLap(${i})">Lap ${lap.lap_number}&nbsp;&nbsp;${t}</button>`;
-  }).join('');
-}
-
-function selLap(i) {
-  _lapIdx=i;
-  document.querySelectorAll('.l-chip').forEach((c,j)=>c.classList.toggle('active',j===i));
-  renderCharts();
-}
-
-function renderCharts() {
-  const lap=_laps[_lapIdx];
-  const area=document.getElementById('carea');
-  area.innerHTML=''; _charts=[];
-  if(!lap||!lap.samples||!lap.samples.length){area.innerHTML='<div class="no-s" style="padding:24px;color:#2a2a2a;font-size:.72rem">No sample data for this lap</div>';return;}
-  const smp=lap.samples;
-  const tMax=smp[smp.length-1].t||1;
-  const dpr=window.devicePixelRatio||1;
-
-  ROWS.forEach(row=>{
-    let yMin=row.ymin==='auto'?Infinity:row.ymin;
-    let yMax=row.ymax==='auto'?-Infinity:row.ymax;
-    if(row.ymin==='auto'||row.ymax==='auto'){
-      smp.forEach(s=>row.ch.forEach(c=>{
-        const v=s[c.key]; if(v==null)return;
-        if(row.ymin==='auto')yMin=Math.min(yMin,v);
-        if(row.ymax==='auto')yMax=Math.max(yMax,v);
-      }));
-      if(row.zero){yMin=Math.min(yMin,0);yMax=Math.max(yMax,0);}
-      const pd=(yMax-yMin)*0.12||1;
-      if(row.ymin==='auto')yMin-=pd;
-      if(row.ymax==='auto')yMax+=pd;
+function renderAI(){
+  if(_sess.ai_analysis){
+    document.getElementById('ai-body').textContent=_sess.ai_analysis;
+    document.getElementById('ai-body').style.display='block';
+    document.getElementById('btn-analyze').style.display='none';
+    document.getElementById('btn-re').style.display='inline-block';
+    if(_sess.ai_analyzed_at){
+      const dt=new Date(_sess.ai_analyzed_at).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+      document.getElementById('ai-meta').textContent='Cached · '+dt+(_sess.ai_model?' · '+_sess.ai_model:'');
     }
-    if(yMin===yMax)yMax=yMin+1;
-
-    const wrap=document.createElement('div');
-    wrap.className='c-row'; wrap.style.height=row.h+'px';
-
-    const lbl=document.createElement('div');
-    lbl.className='c-lbl';
-    lbl.innerHTML=row.ch.map(c=>`<span style="color:${c.color}88">${c.lbl}</span>`).join('');
-
-    const cv=document.createElement('canvas');
-    cv.style.height=row.h+'px'; cv.height=row.h*dpr;
-
-    wrap.appendChild(lbl); wrap.appendChild(cv); area.appendChild(wrap);
-    const ctx={cv,row,smp,yMin,yMax,tMax};
-    _charts.push(ctx);
-
-    cv.addEventListener('mousemove',e=>onHover(e,ctx));
-    cv.addEventListener('mouseleave',()=>{
-      _hT=null;
-      _charts.forEach(c=>draw(c,null));
-      document.getElementById('tip').style.display='none';
-    });
-  });
-
-  requestAnimationFrame(()=>{
-    _charts.forEach(ctx=>{
-      const w=ctx.cv.parentElement.clientWidth;
-      ctx.cv.width=w*dpr; ctx.cv.style.width=w+'px';
-      draw(ctx,null);
-    });
-  });
-}
-
-function draw(ctx,hT) {
-  const {cv,row,smp,yMin,yMax,tMax}=ctx;
-  const dpr=window.devicePixelRatio||1;
-  const W=cv.width, H=cv.height;
-  const {l,r,t,b}=PAD;
-  const ox=l*dpr, oy=t*dpr, pw=W-(l+r)*dpr, ph=H-(t+b)*dpr;
-  const c=cv.getContext('2d');
-  c.clearRect(0,0,W,H);
-  c.fillStyle='#050508'; c.fillRect(0,0,W,H);
-
-  const ticks=3;
-  for(let i=0;i<=ticks;i++){
-    const gy=oy+ph*(1-i/ticks);
-    c.strokeStyle='#0e0e18'; c.lineWidth=1;
-    c.beginPath(); c.moveTo(ox,gy); c.lineTo(ox+pw,gy); c.stroke();
-    const val=yMin+(yMax-yMin)*(i/ticks);
-    c.fillStyle='#2a2a3a'; c.font=`${8.5*dpr}px "Courier New",monospace`; c.textAlign='right';
-    c.fillText(fmtN(val),(l-4)*dpr,gy+3*dpr);
-  }
-
-  if(row.zero){
-    const zy=oy+ph*(1-(0-yMin)/(yMax-yMin));
-    c.strokeStyle='#1a1a2a'; c.lineWidth=1;
-    c.beginPath(); c.moveTo(ox,zy); c.lineTo(ox+pw,zy); c.stroke();
-  }
-
-  row.ch.forEach(ch=>{
-    c.strokeStyle=ch.color; c.lineWidth=1.5*dpr; c.lineJoin='round'; c.lineCap='round';
-    c.beginPath();
-    let first=true, prevY=null;
-    smp.forEach(s=>{
-      const v=s[ch.key]; if(v==null)return;
-      const x=ox+(s.t/tMax)*pw;
-      const y=oy+ph*(1-clamp((v-yMin)/(yMax-yMin),0,1));
-      if(first){c.moveTo(x,y);first=false;}
-      else if(row.stepped&&prevY!=null){c.lineTo(x,prevY);c.lineTo(x,y);}
-      else c.lineTo(x,y);
-      prevY=y;
-    });
-    c.stroke();
-  });
-
-  if(hT!=null){
-    const cx=ox+hT*pw;
-    c.strokeStyle='#ffffff18'; c.lineWidth=1;
-    c.setLineDash([3*dpr,3*dpr]);
-    c.beginPath(); c.moveTo(cx,oy); c.lineTo(cx,oy+ph); c.stroke();
-    c.setLineDash([]);
-    row.ch.forEach(ch=>{
-      const s=smpAt(smp,hT*tMax); if(!s)return;
-      const v=s[ch.key]; if(v==null)return;
-      const y=oy+ph*(1-clamp((v-yMin)/(yMax-yMin),0,1));
-      c.fillStyle=ch.color; c.beginPath(); c.arc(cx,y,3*dpr,0,Math.PI*2); c.fill();
-    });
   }
 }
-
-function onHover(e,ctx) {
-  const {cv,smp,tMax}=ctx;
-  const dpr=window.devicePixelRatio||1;
-  const rect=cv.getBoundingClientRect();
-  const pw=cv.width-(PAD.l+PAD.r)*dpr;
-  const hT=clamp((( e.clientX-rect.left)*dpr-PAD.l*dpr)/pw,0,1);
-  _hT=hT;
-  _charts.forEach(c=>draw(c,hT));
-
-  const s=smpAt(smp,hT*tMax); if(!s)return;
-  const tip=document.getElementById('tip');
-  const rows=[
-    {k:'time', v:s.t!=null?s.t.toFixed(2)+'s':'—', col:'#666'},
-    {k:'speed',v:(s.speed_mph||0).toFixed(1)+' mph',col:'#d4d4d4'},
-    {k:'thr',  v:(s.throttle_pct||0).toFixed(0)+'%', col:'#22c55e'},
-    {k:'brk',  v:(s.brake_pct||0).toFixed(0)+'%',    col:'#ef4444'},
-    {k:'gear', v:s.gear!=null?(s.gear===-1?'R':s.gear===0?'N':s.gear):'—', col:'#f59e0b'},
-    {k:'rpm',  v:s.rpm!=null?Math.round(s.rpm):'—', col:'#a78bfa'},
-    {k:'g_lat',v:(s.g_lat||0).toFixed(2)+'g',        col:'#22d3ee'},
-    {k:'g_lon',v:(s.g_lon||0).toFixed(2)+'g',        col:'#fb923c'},
-  ];
-  tip.innerHTML=rows.map(r=>`<div class="tr"><span class="tk">${r.k}</span><span class="tv" style="color:${r.col}">${r.v}</span></div>`).join('');
-  tip.style.display='block';
-  const tx=e.clientX+18, ty=e.clientY-8;
-  tip.style.left=(tx+150>window.innerWidth?e.clientX-162:tx)+'px';
-  tip.style.top=Math.min(ty,window.innerHeight-220)+'px';
-}
-
-function smpAt(smp,t) {
-  let lo=0, hi=smp.length-1;
-  while(lo<hi){const m=(lo+hi)>>1;if(smp[m].t<t)lo=m+1;else hi=m;}
-  return smp[lo]||null;
-}
-function clamp(v,a,b){return v<a?a:v>b?b:v;}
-function fmtLap(s){const m=Math.floor(s/60);return m+':'+(s%60).toFixed(3).padStart(6,'0');}
-function fmtN(v){if(Math.abs(v)>=1000)return Math.round(v);if(Math.abs(v)>=10)return v.toFixed(1);return v.toFixed(2);}
-
-window.addEventListener('resize',()=>{
-  if(_cur){
-    if(_activeTab==='results') drawPaceChart(_laps);
-    else renderCharts();
+async function runAnalysis(force){
+  const btn=document.getElementById('btn-analyze');
+  const rbtn=document.getElementById('btn-re');
+  const body=document.getElementById('ai-body');
+  const meta=document.getElementById('ai-meta');
+  const err=document.getElementById('ai-err');
+  err.style.display='none';
+  btn.disabled=true;rbtn.disabled=true;
+  if(force){rbtn.textContent='Analyzing…';}else{btn.textContent='Analyzing…';}
+  try{
+    const r=await fetch('/analyze?id='+encodeURIComponent(_id)+(force?'&force=true':''));
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.error||'Unknown error');
+    body.textContent=d.analysis;body.style.display='block';
+    btn.style.display='none';rbtn.style.display='inline-block';rbtn.textContent='Re-analyze';rbtn.disabled=false;
+    if(d.analyzed_at){
+      const dt=new Date(d.analyzed_at).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+      meta.textContent='Analyzed '+dt+(d.model?' · '+d.model:'');
+    }
+  }catch(e){
+    err.textContent='✗ '+e.message;err.style.display='block';
+    btn.disabled=false;btn.textContent='Analyze with Claude';
+    rbtn.disabled=false;if(!_sess.ai_analysis)rbtn.style.display='none';
   }
-});
+}
 init();
 </script>
 </body>
@@ -2813,6 +2595,12 @@ def _db_init():
                     lap_time_s    REAL,
                     max_speed_mph REAL,
                     sample_count  INTEGER DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS track_tips (
+                    track        TEXT PRIMARY KEY,
+                    tip          TEXT,
+                    generated_at TEXT,
+                    model        TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_laps_session  ON laps(session_id);
                 CREATE INDEX IF NOT EXISTS idx_sessions_track ON sessions(track);
@@ -2911,24 +2699,98 @@ def _db_write_session(session_data: dict):
             conn.close()
 
 def _db_sessions_list(limit: int = 100) -> list:
-    """Return sessions newest-first with embedded lap summaries."""
+    """Return sessions newest-first — summary stats only, no sample data."""
     with _db_lock:
         conn = _db_connect()
         try:
             rows = conn.execute(
-                "SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?", (limit,)
+                "SELECT session_id,game,track,car,session_type,race_type,"
+                "started_at,ended_at,packet_count,best_lap_time_s,lap_count "
+                "FROM sessions ORDER BY started_at DESC LIMIT ?", (limit,)
             ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+def _db_tracks_index() -> list:
+    """Return aggregate stats per track, newest-first by last session date."""
+    with _db_lock:
+        conn = _db_connect()
+        try:
+            rows = conn.execute("""
+                SELECT track,
+                       COUNT(*) as session_count,
+                       MIN(best_lap_time_s) as best_lap_time_s,
+                       MAX(started_at) as last_raced
+                FROM sessions
+                WHERE track IS NOT NULL AND track != 'unknown'
+                GROUP BY track
+                ORDER BY last_raced DESC
+            """).fetchall()
+            result = []
+            for row in rows:
+                r = dict(row)
+                last3 = conn.execute("""
+                    SELECT best_lap_time_s FROM sessions
+                    WHERE track=? AND best_lap_time_s IS NOT NULL
+                    ORDER BY started_at DESC LIMIT 3
+                """, (r["track"],)).fetchall()
+                times = [l[0] for l in last3]
+                if len(times) >= 2 and times[0] is not None and times[1] is not None:
+                    diff = times[0] - times[1]
+                    r["trend"] = "dn" if diff > 0.5 else ("up" if diff < -0.5 else "fl")
+                else:
+                    r["trend"] = "fl"
+                result.append(r)
+            return result
+        finally:
+            conn.close()
+
+def _db_track_sessions(track: str) -> list:
+    """Return all sessions for a track, newest-first, with lap time arrays for spark graphs."""
+    with _db_lock:
+        conn = _db_connect()
+        try:
+            rows = conn.execute("""
+                SELECT session_id,game,track,car,race_type,
+                       started_at,ended_at,best_lap_time_s,lap_count,
+                       ai_analyzed_at,ai_model
+                FROM sessions WHERE track=? ORDER BY started_at DESC
+            """, (track,)).fetchall()
             result = []
             for row in rows:
                 s = dict(row)
                 lap_rows = conn.execute(
-                    "SELECT lap_number,lap_time_s,max_speed_mph,sample_count "
-                    "FROM laps WHERE session_id=? ORDER BY lap_number",
+                    "SELECT lap_time_s FROM laps WHERE session_id=? ORDER BY lap_number",
                     (s["session_id"],)
                 ).fetchall()
-                s["laps"] = [dict(l) for l in lap_rows]
+                s["lap_times"] = [l[0] for l in lap_rows if l[0] is not None]
                 result.append(s)
             return result
+        finally:
+            conn.close()
+
+def _db_get_track_tip(track: str) -> Optional[dict]:
+    """Return cached coaching tip for a track, or None."""
+    with _db_lock:
+        conn = _db_connect()
+        try:
+            row = conn.execute(
+                "SELECT tip,generated_at,model FROM track_tips WHERE track=?", (track,)
+            ).fetchone()
+            return dict(row) if row and row["tip"] else None
+        finally:
+            conn.close()
+
+def _db_save_track_tip(track: str, tip: str, model: str):
+    with _db_lock:
+        conn = _db_connect()
+        try:
+            conn.execute("""
+                INSERT OR REPLACE INTO track_tips (track,tip,generated_at,model)
+                VALUES (?,?,?,?)
+            """, (track, tip, datetime.now().isoformat(), model))
+            conn.commit()
         finally:
             conn.close()
 
@@ -3009,19 +2871,23 @@ def _summarize_lap(lap: dict) -> Optional[dict]:
     samples = lap.get("samples", [])
     if not samples or not lap.get("lap_time_s"):
         return None
-    throttle = [s["throttle_pct"] for s in samples]
-    brake    = [s["brake_pct"]    for s in samples]
-    g_lat    = [abs(s.get("g_lat", 0)) for s in samples]
-    slip     = [abs(s.get("slip_rl", 0)) + abs(s.get("slip_rr", 0)) for s in samples]
+    throttle = [s.get("throttle_pct", 0) for s in samples]
+    brake    = [s.get("brake_pct", 0)    for s in samples]
+    g_lat    = [abs(s.get("g_lat", 0))   for s in samples]
+    slip_rl  = [abs(s.get("slip_rl", 0)) for s in samples]
+    slip_rr  = [abs(s.get("slip_rr", 0)) for s in samples]
+    slip_avg = [(a + b) / 2 for a, b in zip(slip_rl, slip_rr)]
     n = len(samples)
     return {
-        "lap_number":    lap["lap_number"],
-        "lap_time_s":    lap["lap_time_s"],
-        "max_speed_mph": lap.get("max_speed_mph", 0),
-        "avg_throttle":  round(sum(throttle) / n, 1),
-        "avg_brake":     round(sum(brake)    / n, 1),
-        "avg_g_lat":     round(sum(g_lat)    / n, 3),
-        "avg_slip":      round(sum(slip)      / n, 4),
+        "lap_number":      lap["lap_number"],
+        "lap_time_s":      lap["lap_time_s"],
+        "max_speed_mph":   lap.get("max_speed_mph", 0),
+        "avg_throttle":    round(sum(throttle) / n, 1),
+        "avg_brake":       round(sum(brake)    / n, 1),
+        "avg_g_lat":       round(sum(g_lat)    / n, 3),
+        "avg_slip":        round(sum(slip_avg) / n, 4),
+        "peak_slip":       round(max(slip_avg),     4) if slip_avg else 0,
+        "slip_above_pct":  round(sum(1 for v in slip_avg if v > 0.1) / n * 100, 1),
     }
 
 
@@ -3029,67 +2895,65 @@ def _build_analysis_prompt(session: dict, laps: list, historical: list,
                            prev_analyses: Optional[list] = None) -> str:
     game  = session.get("game", "unknown").replace("_", " ").title()
     track = session.get("track", "unknown")
-    car   = session.get("car", "unknown")
     date  = (session.get("started_at") or "")[:10]
 
     summaries = [s for lap in laps if (s := _summarize_lap(lap))]
     valid_times = [s["lap_time_s"] for s in summaries]
-    best = min(valid_times) if valid_times else None
-    avg  = sum(valid_times) / len(valid_times) if valid_times else None
-    cons = _statistics.stdev(valid_times) if len(valid_times) > 1 else 0.0
+    best_time = min(valid_times) if valid_times else None
+    avg_time  = sum(valid_times) / len(valid_times) if valid_times else None
 
-    header = (
-        f"Lap  Time      MaxSpd   Throttle  Brake  G-Lat   Slip\n"
-        f"{'-'*58}\n"
-    )
+    hdr = "Lap | Time      | Throttle% | Brake% | MaxSpd | AvgSlip | PeakSlip | Slip>0.1%\n"
+    hdr += "-" * 80 + "\n"
     rows = ""
     for s in summaries:
-        marker = " ◄" if s["lap_time_s"] == best else ""
+        marker = " ◄" if best_time and abs(s["lap_time_s"] - best_time) < 0.001 else ""
         rows += (
-            f"{s['lap_number']:<4} {s['lap_time_s']:.3f}s   "
-            f"{s['max_speed_mph']:.0f}mph    "
-            f"{s['avg_throttle']:.0f}%       "
-            f"{s['avg_brake']:.0f}%    "
-            f"{s['avg_g_lat']:.2f}g   "
-            f"{s['avg_slip']:.4f}{marker}\n"
+            f"{s['lap_number']:<3} | {s['lap_time_s']:.3f}s   | "
+            f"{s['avg_throttle']:.0f}%        | {s['avg_brake']:.0f}%     | "
+            f"{s['max_speed_mph']:.0f}mph  | {s['avg_slip']:.4f}  | "
+            f"{s['peak_slip']:.4f}   | {s['slip_above_pct']:.1f}%{marker}\n"
         )
 
+    # Historical baseline — last 3 sessions at same track (from DB summaries)
     hist_block = ""
     if historical:
-        hist_block = f"\nHISTORICAL SESSIONS — {track} (most recent first):\n"
-        for h in reversed(historical[-5:]):
-            h_date = (h.get("started_at") or "")[:10]
-            h_best = h.get("best_lap_time_s")
-            h_laps = len(h.get("laps", []))
-            if h_best:
-                hist_block += f"  {h_date}  best: {h_best:.3f}s  laps: {h_laps}\n"
+        hist_sessions = historical[-3:]
+        h_best_times  = [h.get("best_lap_time_s") for h in hist_sessions if h.get("best_lap_time_s")]
+        h_avg_slip_vals = []
+        sessions_dir = storage_path() / "sessions"
+        for h in hist_sessions:
+            try:
+                hlaps = json.loads((sessions_dir / f"{h['session_id']}_laps.json").read_text())
+                hsums = [s for lap in hlaps if (s := _summarize_lap(lap))]
+                if hsums:
+                    h_avg_slip_vals.append(sum(s["avg_slip"] for s in hsums) / len(hsums))
+            except Exception:
+                pass
+        h_best_str = f"{min(h_best_times):.3f}s" if h_best_times else "—"
+        h_avg_str  = f"{sum(valid_times)/len(valid_times):.3f}s" if valid_times else "—"
+        h_slip_str = f"{sum(h_avg_slip_vals)/len(h_avg_slip_vals):.4f}" if h_avg_slip_vals else "—"
+        hist_block = (
+            f"\nHISTORICAL BASELINE (last {len(hist_sessions)} sessions at this track):\n"
+            f"Best lap: {h_best_str} | Avg lap: {h_avg_str} | Avg slip: {h_slip_str}\n"
+        )
 
-    prev_block = ""
-    if prev_analyses:
-        prev_block = f"\nPREVIOUS AI COACHING NOTES — {track}:\n"
-        for a in prev_analyses[-3:]:
-            a_date = (a.get("analyzed_at") or "")[:10]
-            prev_block += f"\n[Session analyzed {a_date}]\n{a.get('analysis', '')}\n"
+    return (
+        f"Track: {track} | Game: {game} | Session: {date}\n\n"
+        f"THIS SESSION — LAP TABLE:\n{hdr}{rows}\n"
+        f"{hist_block}\n"
+        "Analyze this session. Focus on slip management, throttle discipline, "
+        "brake consistency, and lap time trend. Reference specific laps. "
+        "Compare against historical baseline where relevant. Be direct, no padding."
+    )
 
-    return f"""You are a sim racing telemetry analyst with memory of this driver's history on this track.
-{prev_block}
----
-NOW ANALYZE THIS SESSION: {game} | Track: {track} | Car: {car} | Date: {date}
-Best lap: {f"{best:.3f}s" if best else "—"} | Avg: {f"{avg:.3f}s" if avg else "—"} | Consistency (σ): {cons:.3f}s
-{hist_block}
-LAP TABLE (◄ = best lap):
-{header}{rows}
-Columns: Time=lap time, MaxSpd=top speed, Throttle/Brake=session averages, G-Lat=avg lateral G, Slip=avg rear wheel slip (higher=more oversteer).
 
-Write 3–5 focused paragraphs covering:
-1. Pace and consistency — is the driver finding a rhythm?
-2. Driving style — what do throttle, brake, and G-lat numbers reveal?
-3. Stability — what does the slip trend across laps indicate?
-4. The single most impactful area to improve, with a specific suggestion.
-5. Progress compared to previous sessions on this track — are the earlier coaching points being addressed? (skip if no prior analyses)
-
-Be specific. Use the numbers. No generic advice."""
-
+def _build_track_tip_prompt(track: str, stats: dict) -> str:
+    best = f"{stats['best_lap_time_s']:.3f}s" if stats.get("best_lap_time_s") else "unknown"
+    return (
+        f"Track: {track} | Sessions: {stats.get('session_count',0)} | Best lap: {best} | Trend: {stats.get('trend','fl')}\n\n"
+        "Write exactly one coaching focus sentence (max 20 words) for this sim racing driver at this track. "
+        "Be specific to the track's characteristics if you know it. No intro, no padding, just the sentence."
+    )
 
 def _call_claude_api(prompt: str) -> str:
     api_key = config.get("anthropic_api_key", "").strip()
@@ -3210,11 +3074,108 @@ async def handle_status(reader, writer):
             writer.write(_http_response("200 OK", "application/json", json.dumps(state, indent=2).encode()))
 
         elif path in ("/sessions", "/sessions/"):
-            writer.write(_http_response("200 OK", "text/html", SESSIONS_HTML.encode()))
+            writer.write(_http_response("200 OK", "text/html", TRACKS_HTML.encode()))
+
+        elif path == "/sessions/track":
+            writer.write(_http_response("200 OK", "text/html", TRACK_DETAIL_HTML.encode()))
+
+        elif path == "/sessions/session":
+            writer.write(_http_response("200 OK", "text/html", SESSION_DETAIL_HTML.encode()))
 
         elif path == "/sessions/data":
             result = _db_sessions_list(100)
             writer.write(_http_response("200 OK", "application/json", json.dumps(result).encode()))
+
+        elif path == "/sessions/tracks":
+            result = _db_tracks_index()
+            writer.write(_http_response("200 OK", "application/json", json.dumps(result).encode()))
+
+        elif path == "/sessions/track/data":
+            qs = {k: urllib.parse.unquote_plus(v)
+                  for pair in query_string.split("&") if "=" in pair
+                  for k, v in [pair.split("=", 1)]}
+            track_name = qs.get("name", "")
+            result = _db_track_sessions(track_name)
+            writer.write(_http_response("200 OK", "application/json", json.dumps(result).encode()))
+
+        elif path == "/sessions/track/tip":
+            qs = {k: urllib.parse.unquote_plus(v)
+                  for pair in query_string.split("&") if "=" in pair
+                  for k, v in [pair.split("=", 1)]}
+            track_name = qs.get("name", "")
+            generate   = qs.get("generate", "") == "true"
+            cached = _db_get_track_tip(track_name)
+            if cached:
+                writer.write(_http_response("200 OK", "application/json",
+                                            json.dumps(cached).encode()))
+            elif generate and config.get("anthropic_api_key", "").strip():
+                try:
+                    stats = next((t for t in _db_tracks_index() if t["track"] == track_name), {})
+                    tip_prompt = _build_track_tip_prompt(track_name, stats)
+                    tip_text   = await asyncio.to_thread(_call_claude_api, tip_prompt)
+                    tip_text   = tip_text.strip().split("\n")[0][:200]
+                    model_name = config.get("anthropic_model", "claude-sonnet-4-6")
+                    _db_save_track_tip(track_name, tip_text, model_name)
+                    writer.write(_http_response("200 OK", "application/json",
+                                                json.dumps({"tip": tip_text, "generated_at": datetime.now().isoformat(), "model": model_name}).encode()))
+                except Exception as exc:
+                    log.error(f"Track tip generation error: {exc}")
+                    writer.write(_http_response("200 OK", "application/json", b'{"tip":null}'))
+            else:
+                writer.write(_http_response("200 OK", "application/json", b'{"tip":null}'))
+
+        elif path == "/sessions/session/data":
+            qs = {k: urllib.parse.unquote_plus(v)
+                  for pair in query_string.split("&") if "=" in pair
+                  for k, v in [pair.split("=", 1)]}
+            sid = qs.get("id", "")
+            with _db_lock:
+                conn = _db_connect()
+                try:
+                    sess_row = conn.execute(
+                        "SELECT session_id,game,track,car,race_type,started_at,ended_at,"
+                        "best_lap_time_s,lap_count,ai_analysis,ai_analyzed_at,ai_model "
+                        "FROM sessions WHERE session_id=?", (sid,)
+                    ).fetchone()
+                finally:
+                    conn.close()
+            if not sess_row:
+                writer.write(_http_response("404 Not Found", "application/json",
+                                            json.dumps({"error": "Session not found"}).encode()))
+            else:
+                sess_dict = dict(sess_row)
+                laps_file = storage_path() / "sessions" / f"{sid}_laps.json"
+                try:
+                    raw_laps = json.loads(laps_file.read_text())
+                except OSError:
+                    raw_laps = []
+                computed_laps = []
+                for lap in raw_laps:
+                    samples  = lap.get("samples", [])
+                    n        = len(samples)
+                    lap_time = lap.get("lap_time_s")
+                    row = {
+                        "lap_number":    lap.get("lap_number"),
+                        "lap_time_s":    lap_time,
+                        "max_speed_mph": lap.get("max_speed_mph"),
+                    }
+                    if n:
+                        throttle   = [s.get("throttle_pct", 0) for s in samples]
+                        brake      = [s.get("brake_pct", 0)    for s in samples]
+                        slip_vals  = [(abs(s.get("slip_rl", 0)) + abs(s.get("slip_rr", 0))) / 2
+                                      for s in samples]
+                        row["avg_throttle"]   = round(sum(throttle) / n, 1)
+                        row["avg_brake"]      = round(sum(brake)    / n, 1)
+                        row["avg_slip"]       = round(sum(slip_vals) / n, 4)
+                        row["peak_slip"]      = round(max(slip_vals), 4)
+                        row["slip_above_pct"] = round(
+                            sum(1 for v in slip_vals if v > 0.1) / n * 100, 1)
+                    else:
+                        row["avg_throttle"] = row["avg_brake"] = None
+                        row["avg_slip"] = row["peak_slip"] = row["slip_above_pct"] = None
+                    computed_laps.append(row)
+                writer.write(_http_response("200 OK", "application/json",
+                                            json.dumps({"session": sess_dict, "laps": computed_laps}).encode()))
 
         elif path == "/sessions/laps":
             qs = {k: urllib.parse.unquote_plus(v)
@@ -3294,34 +3255,37 @@ async def handle_status(reader, writer):
             elif not force and analysis_file.exists():
                 writer.write(_http_response("200 OK", "application/json", analysis_file.read_bytes()))
             else:
+                # Get session from DB; fall back to JSON file
+                with _db_lock:
+                    conn = _db_connect()
+                    try:
+                        sess_row = conn.execute(
+                            "SELECT * FROM sessions WHERE session_id=?", (sid,)
+                        ).fetchone()
+                    finally:
+                        conn.close()
+                session_data = dict(sess_row) if sess_row else None
+                if not session_data:
+                    try:
+                        session_data = json.loads((sessions_dir / f"{sid}.json").read_text())
+                    except OSError:
+                        session_data = None
                 try:
-                    session_data = json.loads((sessions_dir / f"{sid}.json").read_text())
-                    laps_data    = json.loads((sessions_dir / f"{sid}_laps.json").read_text())
+                    laps_data = json.loads((sessions_dir / f"{sid}_laps.json").read_text())
                 except OSError:
+                    laps_data = []
+                if not session_data:
                     writer.write(_http_response("404 Not Found", "application/json",
                                                 json.dumps({"error": "Session not found"}).encode()))
                 else:
                     track = session_data.get("track", "unknown")
-                    historical    = []
-                    prev_analyses = []
+                    # Pull last 3 historical sessions at same track from DB
+                    historical = []
                     if track and track != "unknown":
-                        for f in sorted(sessions_dir.glob("*.json")):
-                            if f.name.endswith("_laps.json") or f.name.endswith("_analysis.json"):
-                                continue
-                            if f.stem == sid:
-                                continue
-                            try:
-                                h = json.loads(f.read_text())
-                                if h.get("track") == track:
-                                    historical.append(h)
-                                    af = sessions_dir / f"{f.stem}_analysis.json"
-                                    if af.exists():
-                                        prev_analyses.append(json.loads(af.read_text()))
-                            except Exception:
-                                pass
+                        hist_rows = _db_track_sessions(track)
+                        historical = [h for h in hist_rows if h["session_id"] != sid][:3]
                     try:
-                        prompt   = _build_analysis_prompt(session_data, laps_data,
-                                                          historical, prev_analyses)
+                        prompt   = _build_analysis_prompt(session_data, laps_data, historical)
                         analysis = await asyncio.to_thread(_call_claude_api, prompt)
                         result_obj = {
                             "session_id":  sid,
