@@ -1647,7 +1647,7 @@ es.onmessage=e=>{
     el.textContent=t!=null?Math.round(t)+'°':'—';
     el.className='tyre-temp '+tyreClass(t);
   });
-  $('ty-cmp').textContent=d.tyre_compound||'';
+  const tyCmp=$('ty-cmp');if(tyCmp)tyCmp.textContent=d.tyre_compound||'';
 
   // udp strip
   const udp=d.udp_received||{},rej=d.udp_rejected||{},rsz=d.last_rejected_size||{};
