@@ -169,8 +169,16 @@ sudo journalctl -u simtelemetry -f
 
 ## License
 
+<<<<<<< HEAD
 MIT
 
 ---
 
 *Forza Motorsport is a trademark of Microsoft. Pacefinder is not affiliated with Microsoft, Codemasters, or Kunos Simulazioni.*
+=======
+MIT — read it, run it, fork it.
+
+---
+
+*Forza Motorsport is a trademark of Microsoft. Pacefinder is not affiliated with Microsoft, Codemasters, or Kunos Simulazioni.*
+>>>>>>> 04b817f (f1 and acc listener fixes)

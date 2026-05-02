@@ -284,27 +284,24 @@ _ACC_SESSION_TYPES = {
 }
 
 def parse_acc(data: bytes) -> Optional[dict]:
-    """Parse ACC physics or graphics packet; route by value heuristic."""
+    """Parse ACC physics (packetId=0) or graphics (packetId=1) packet."""
     if len(data) < 100:
         return None
     try:
-        # Discriminate physics vs graphics:
-        # offset 4 = gas (float) in physics — nonzero float >> 3 as uint
-        # offset 4 = status (int 0-3) in graphics
-        # offset 8 = brake (float) in physics — 0 when not braking
-        # offset 8 = session type (int 0-10) in graphics
-        # Both fields ≤ their physics-float equivalent only when inputs are exactly zero.
-        candidate_status  = struct.unpack_from("<I", data, 4)[0]
-        candidate_session = struct.unpack_from("<I", data, 8)[0]
-        if candidate_status <= 3 and candidate_session <= 10 and len(data) >= 140:
-            # Graphics packet: extract session type and race position
-            session_int  = struct.unpack_from("<i", data, 8)[0]
-            position     = struct.unpack_from("<i", data, 136)[0]
+        packet_id = struct.unpack_from("<i", data, 0)[0]
+        if packet_id == 1:
+            # Graphics packet: session type at offset 8, race position at offset 136
+            if len(data) < 140:
+                return None
+            session_int = struct.unpack_from("<i", data, 8)[0]
+            position    = struct.unpack_from("<i", data, 136)[0]
             return {
                 "_packet_type": "graphics",
                 "session_type": _ACC_SESSION_TYPES.get(session_int, "unknown"),
                 "race_position": position if position > 0 else None,
             }
+        if packet_id != 0:
+            return None  # Static or unknown packet — ignore
     except struct.error:
         return None
     try:
@@ -408,7 +405,7 @@ def parse_f1(data: bytes) -> Optional[dict]:
     if len(data) < F1_HEADER_SIZE:
         return None
     try:
-        packet_id  = struct.unpack_from("<B", data, 5)[0]
+        packet_id  = struct.unpack_from("<B", data, 6)[0]
         session_uid = struct.unpack_from("<Q", data, 7)[0]
 
         if packet_id == 1:
@@ -789,6 +786,10 @@ class Session:
         if self.game in ("forza_motorsport", "forza_horizon_5") and self.session_type == "unknown":
             self.session_type = self._infer_forza_session_type()
 
+        # Derive grid/finish positions for race sessions
+        grid_pos  = self._race_positions[0]  if self._race_positions and self.session_type == "race" else None
+        finish_pos = self._race_positions[-1] if self._race_positions and self.session_type == "race" else None
+
         session_data = {
             "session_id":       self.session_id,
             "game":             self.game,
@@ -801,6 +802,8 @@ class Session:
             "packet_count":     self.packet_count,
             "best_lap_time_s":  round(self.best_lap_time_s, 3) if self.best_lap_time_s else None,
             "laps":             laps_summary,
+            "grid_pos":         grid_pos,
+            "finish_pos":       finish_pos,
         }
 
         _db_write_session(session_data)
@@ -2303,23 +2306,108 @@ a{color:inherit;text-decoration:none}
 .tb{height:50px;display:flex;align-items:center;padding:0 var(--sp-4);gap:14px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:10}
 .tb h1{font-size:1.3rem;color:var(--text);letter-spacing:3px;text-transform:uppercase;flex:1}
 .tb-nav{display:flex;gap:14px}
-.tb-nav a{font-size:.8rem;color:var(--text-muted);letter-spacing:1px;text-transform:uppercase}
+.tb-nav a{font-size:.8rem;color:#888;letter-spacing:1px;text-transform:uppercase}
 .tb-nav a:hover{color:#ccc}
-.tb-nav a.cur{color:var(--text);border-bottom:1px solid var(--n-200)}
-.page{padding:32px 28px}
-.page-hdr{margin-bottom:28px}
-.page-hdr h2{font-size:1.1rem;color:var(--text);letter-spacing:2px;text-transform:uppercase}
-.games-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
-.gc{background:#060608;border:1px solid var(--n-700);padding:var(--sp-6) 22px;cursor:pointer;transition:border-color .15s}
-.gc:hover{border-color:var(--surface-bd);background:#08080e}
-.gc.empty{opacity:.4;cursor:default}
-.gc.empty:hover{border-color:var(--n-700);background:#060608}
-.gc-name{font-size:1.6rem;font-weight:900;color:var(--text);letter-spacing:1px;margin-bottom:var(--sp-1)}
-.gc-desc{font-size:.72rem;color:var(--n-400);letter-spacing:.5px;margin-bottom:18px}
-.gc-stats{display:flex;gap:var(--sp-6)}
-.gc-stat .v{font-size:1.2rem;font-weight:900;color:var(--text-head)}
-.gc-stat .l{font-size:.65rem;color:var(--n-300);text-transform:uppercase;letter-spacing:1px;margin-top:1px}
-.gc-last{font-size:.72rem;color:var(--n-500);margin-top:14px;border-top:1px solid var(--border-faint);padding-top:10px}
+.tb-nav a.cur{color:var(--text);border-bottom:1px solid #aaaaaa}
+.page{padding:28px 28px 60px;max-width:1400px;margin:0 auto}
+/* ── KPI Cards ─────────────────────────────────────────────── */
+.kpi-row{display:flex;gap:12px;overflow-x:auto;padding-bottom:4px;margin-bottom:20px;scrollbar-width:none}
+.kpi-row::-webkit-scrollbar{display:none}
+.kpi{background:#060608;border:1px solid #1a1a1a;border-radius:8px;padding:18px 20px;min-width:160px;flex:1}
+.kpi-label{font-size:.6rem;color:#555;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px}
+.kpi-val{font-size:1.8rem;font-weight:900;line-height:1;margin-bottom:6px}
+.kpi-sub{font-size:.65rem;color:#444;letter-spacing:.5px}
+.kpi-val.blue{color:#4a7aaa}
+.kpi-val.green{color:#22c55e}
+.kpi-val.amber{color:#f59e0b}
+.kpi-val.red{color:#ef4444}
+.kpi-val.muted{color:#333}
+/* ── Form Card ──────────────────────────────────────────────── */
+.form-card{background:#060608;border:1px solid #1a1a1a;border-radius:8px;padding:20px 24px;margin-bottom:20px;display:flex;gap:32px;flex-wrap:wrap}
+.form-left{min-width:180px}
+.form-sect-label{font-size:.6rem;color:#555;letter-spacing:2px;text-transform:uppercase;margin-bottom:10px}
+.form-trend{font-size:1rem;font-weight:700;margin-bottom:6px}
+.form-trend.up{color:#22c55e}
+.form-trend.dn{color:#ef4444}
+.form-trend.fl{color:#666}
+.form-pct{font-size:.8rem;color:#888;margin-bottom:4px}
+.form-note{font-size:.65rem;color:#444}
+.form-right{flex:1;min-width:260px}
+.form-filters{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+.filter-group{display:flex;gap:4px}
+.ftog{font-size:.6rem;letter-spacing:1px;text-transform:uppercase;padding:4px 10px;border:1px solid #1e1e1e;border-radius:4px;cursor:pointer;color:#555;background:none;transition:all .15s}
+.ftog.on{border-color:#2a2a3a;color:#ccc;background:#0a0a14}
+.form-chart{display:flex;align-items:flex-end;gap:4px;height:72px}
+.bar{flex:1;min-width:12px;border-radius:3px 3px 0 0;transition:opacity .2s;cursor:default;position:relative}
+.bar:hover .bar-tip{display:block}
+.bar-tip{display:none;position:absolute;bottom:calc(100% + 4px);left:50%;transform:translateX(-50%);background:#111;border:1px solid #2a2a2a;border-radius:4px;padding:4px 8px;font-size:.6rem;color:#ccc;white-space:nowrap;z-index:5}
+/* ── Pills row ──────────────────────────────────────────────── */
+.pills-section{margin-bottom:20px}
+.pills-label{font-size:.6rem;color:#555;letter-spacing:2px;text-transform:uppercase;margin-bottom:10px}
+.pills-row{display:flex;gap:10px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none}
+.pills-row::-webkit-scrollbar{display:none}
+.pill{background:#060608;border:1px solid #1a1a1a;border-radius:20px;padding:8px 16px;white-space:nowrap;cursor:pointer;transition:border-color .15s}
+.pill:hover{border-color:#2a2a3a}
+.pill-circuit{font-size:.6rem;color:#555;letter-spacing:1px;text-transform:uppercase;margin-bottom:3px}
+.pill-time{font-size:.9rem;font-weight:700;color:#f59e0b}
+/* ── Circuit Table ──────────────────────────────────────────── */
+.table-section{margin-bottom:24px}
+.table-label{font-size:.6rem;color:#555;letter-spacing:2px;text-transform:uppercase;margin-bottom:12px}
+.ctable{width:100%;border-collapse:collapse}
+.ctable th{font-size:.6rem;color:#444;letter-spacing:1.5px;text-transform:uppercase;padding:8px 12px;text-align:left;border-bottom:1px solid #111}
+.ctable td{padding:11px 12px;font-size:.8rem;border-top:1px solid #0e0e0e}
+.ctable tr{cursor:pointer;transition:background .12s}
+.ctable tr:hover td{background:#06060c}
+.ctable .td-track{color:#ccc;font-weight:700}
+.ctable .td-num{color:#666;font-variant-numeric:tabular-nums}
+.ctable .td-blue{color:#4a7aaa;font-weight:700;font-variant-numeric:tabular-nums}
+.ctable .td-amber{color:#f59e0b;font-variant-numeric:tabular-nums}
+.ctable .td-trend-up{color:#22c55e}
+.ctable .td-trend-dn{color:#ef4444}
+.ctable .td-trend-fl{color:#333}
+/* ── Game Cards ─────────────────────────────────────────────── */
+.games-section{margin-bottom:24px}
+.games-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.gc{background:#060608;border:1px solid #1a1a1a;border-radius:8px;padding:20px 22px;cursor:pointer;transition:border-color .15s}
+.gc:hover{border-color:#2a2a3a;background:#08080e}
+.gc.empty{opacity:.35;cursor:default}
+.gc.empty:hover{border-color:#1a1a1a;background:#060608}
+.gc-name{font-size:1.5rem;font-weight:900;color:#fff;letter-spacing:1px;margin-bottom:2px}
+.gc-desc{font-size:.65rem;color:#444;letter-spacing:.5px;margin-bottom:14px}
+.gc-stats{display:flex;gap:20px;margin-bottom:14px}
+.gc-stat .v{font-size:1.1rem;font-weight:900;color:#e0e0e0}
+.gc-stat .l{font-size:.6rem;color:#444;text-transform:uppercase;letter-spacing:1px;margin-top:1px}
+.gc-best{font-size:.7rem;color:#f59e0b;margin-bottom:2px}
+.gc-best span{color:#444}
+.gc-last{font-size:.65rem;color:#333;border-top:1px solid #0e0e0e;padding-top:10px;margin-top:4px}
+.gc-spark{height:28px;margin-bottom:10px}
+/* ── Recent Feed ────────────────────────────────────────────── */
+.recent-section{margin-bottom:24px}
+.recent-label{font-size:.6rem;color:#555;letter-spacing:2px;text-transform:uppercase;margin-bottom:12px}
+.recent-row{display:flex;align-items:center;gap:14px;padding:10px 14px;border-top:1px solid #0e0e0e;cursor:pointer;transition:background .12s;border-radius:4px}
+.recent-row:hover{background:#06060c}
+.recent-badge{font-size:.55rem;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;padding:3px 8px;border-radius:3px;border:1px solid}
+.recent-badge.forza{color:#3b82f6;border-color:#3b82f620;background:#3b82f608}
+.recent-badge.acc{color:#a78bfa;border-color:#a78bfa20;background:#a78bfa08}
+.recent-badge.f1{color:#ef4444;border-color:#ef444420;background:#ef444408}
+.recent-circuit{flex:1;font-size:.82rem;color:#ccc;font-weight:700}
+.recent-date{font-size:.65rem;color:#333;white-space:nowrap}
+.recent-lap{font-size:.75rem;color:#f59e0b;font-variant-numeric:tabular-nums;white-space:nowrap}
+.recent-pos{font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:3px;white-space:nowrap}
+.recent-pos.p1{color:#f59e0b;background:#f59e0b12;border:1px solid #f59e0b30}
+.recent-pos.podium{color:#22c55e;background:#22c55e12;border:1px solid #22c55e30}
+.recent-pos.ok{color:#888;background:#88888812;border:1px solid #88888830}
+.recent-gained{font-size:.65rem;font-weight:700;white-space:nowrap}
+.recent-gained.pos{color:#22c55e}
+.recent-gained.neg{color:#ef4444}
+.recent-gained.neu{color:#444}
+@media(max-width:640px){
+  .page{padding:16px 14px 48px}
+  .kpi{min-width:130px;padding:14px 14px}
+  .kpi-val{font-size:1.4rem}
+  .form-card{flex-direction:column}
+  .ctable th:nth-child(3),.ctable td:nth-child(3){display:none}
+}
 </style>
 </head>
 <body>
@@ -2334,46 +2422,253 @@ a{color:inherit;text-decoration:none}
 </div>
 <script>if(location.search.includes('debug=true'))document.getElementById('nav-admin').style.display='';</script>
 <div class="page">
-  <div class="page-hdr"><h2>Sessions</h2></div>
-  <div class="games-grid" id="grid"><div style="color:#333;padding:24px">Loading&hellip;</div></div>
+
+  <!-- KPI row -->
+  <div class="kpi-row" id="kpi-row">
+    <div class="kpi"><div class="kpi-label">Total Sessions</div><div class="kpi-val muted" id="kv-total">—</div><div class="kpi-sub" id="ks-total">&nbsp;</div></div>
+    <div class="kpi"><div class="kpi-label">Avg Finish (Real)</div><div class="kpi-val blue" id="kv-finish">—</div><div class="kpi-sub">Race lobbies only</div></div>
+    <div class="kpi"><div class="kpi-label">Avg Pos Gained</div><div class="kpi-val green" id="kv-gained">—</div><div class="kpi-sub">From grid position</div></div>
+    <div class="kpi"><div class="kpi-label">Win Rate</div><div class="kpi-val amber" id="kv-win">—</div><div class="kpi-sub">Real lobbies only</div></div>
+    <div class="kpi"><div class="kpi-label">Podium Rate</div><div class="kpi-val green" id="kv-podium">—</div><div class="kpi-sub">Real lobbies only</div></div>
+    <div class="kpi"><div class="kpi-label">Total Laps</div><div class="kpi-val muted" id="kv-laps">—</div><div class="kpi-sub" id="ks-circuits">&nbsp;</div></div>
+  </div>
+
+  <!-- Current Form -->
+  <div class="form-card">
+    <div class="form-left">
+      <div class="form-sect-label">Current Form</div>
+      <div class="form-trend fl" id="form-trend">—</div>
+      <div class="form-pct" id="form-pct"></div>
+      <div class="form-note" id="form-note"></div>
+    </div>
+    <div class="form-right">
+      <div class="form-filters">
+        <div class="filter-group" id="type-filters">
+          <button class="ftog on" data-val="real">Real</button>
+          <button class="ftog" data-val="ai">AI</button>
+          <button class="ftog" data-val="all">All</button>
+        </div>
+        <div class="filter-group" id="last-filters">
+          <button class="ftog" data-val="5">Last 5</button>
+          <button class="ftog on" data-val="10">Last 10</button>
+          <button class="ftog" data-val="20">Last 20</button>
+        </div>
+      </div>
+      <div class="form-chart" id="form-chart"><span style="color:#222;font-size:.7rem">No race data</span></div>
+    </div>
+  </div>
+
+  <!-- Best Laps Pills -->
+  <div class="pills-section">
+    <div class="pills-label">Best Laps by Circuit</div>
+    <div class="pills-row" id="pills-row"><span style="color:#222;font-size:.7rem">—</span></div>
+  </div>
+
+  <!-- Circuit Table -->
+  <div class="table-section">
+    <div class="table-label">Circuits</div>
+    <table class="ctable">
+      <thead><tr>
+        <th>Circuit</th><th>Sessions</th><th>Avg Finish</th><th>Best Lap</th><th>Trend</th>
+      </tr></thead>
+      <tbody id="circuit-tbody"><tr><td colspan="5" style="color:#222;padding:20px 12px">—</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- Game Cards -->
+  <div class="games-section">
+    <div class="table-label" style="margin-bottom:12px">By Game</div>
+    <div class="games-grid" id="games-grid"><div style="color:#222;padding:20px">—</div></div>
+  </div>
+
+  <!-- Recent Sessions -->
+  <div class="recent-section">
+    <div class="recent-label">Recent Sessions</div>
+    <div id="recent-feed"><div style="color:#222;padding:20px">—</div></div>
+  </div>
+
 </div>
 <script>
-const GAME_LABELS={'forza_motorsport':'Forza','acc':'ACC','f1':'F1'};
-const GAME_DESC={'forza_motorsport':'Forza Motorsport / Horizon','acc':'Assetto Corsa Competizione','f1':'F1 2023 / 2024'};
-function fmtDate(iso){if(!iso)return null;return new Date(iso).toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'});}
-async function init(){
+const GL={'forza_motorsport':'Forza','forza_horizon_5':'Horizon','acc':'ACC','f1':'F1'};
+const GD={'forza_motorsport':'Forza Motorsport / Horizon','acc':'Assetto Corsa Competizione','f1':'F1 2023 / 2024'};
+function fmtLap(s){if(!s)return'—';const m=Math.floor(s/60),r=s%60;return m+':'+(r<10?'0':'')+r.toFixed(3);}
+function fmtDate(iso){if(!iso)return'—';return new Date(iso).toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'});}
+function fmtRel(iso){if(!iso)return'';const d=new Date(iso),n=Date.now(),s=Math.floor((n-d)/1000);if(s<60)return s+'s ago';if(s<3600)return Math.floor(s/60)+'m ago';if(s<86400)return Math.floor(s/3600)+'h ago';return Math.floor(s/86400)+'d ago';}
+function p1(v,d=1){return v==null?null:parseFloat(v.toFixed(d));}
+
+let _type='real',_last=10;
+
+// ── KPI cards ────────────────────────────────────────────────
+async function loadKPIs(){
+  let k={};
+  try{k=await fetch('/sessions/career').then(r=>r.json());}catch(e){}
+  const t=k.total_sessions||0,rc=k.real_count||0,ai=k.ai_count||0;
+  document.getElementById('kv-total').textContent=t||'0';
+  document.getElementById('ks-total').textContent=t?(rc+' real · '+ai+' AI'):'';
+  const af=k.avg_finish_real;
+  document.getElementById('kv-finish').textContent=af!=null?'P'+p1(af):'—';
+  const pg=k.avg_pos_gained;
+  document.getElementById('kv-gained').textContent=pg!=null?(pg>=0?'+':'')+p1(pg):'—';
+  document.getElementById('kv-win').textContent=k.win_rate!=null?p1(k.win_rate,0)+'%':'—';
+  document.getElementById('kv-podium').textContent=k.podium_rate!=null?p1(k.podium_rate,0)+'%':'—';
+  document.getElementById('kv-laps').textContent=k.total_laps||'0';
+  document.getElementById('ks-circuits').textContent=(k.circuit_count||0)+' circuits';
+}
+
+// ── Form chart ────────────────────────────────────────────────
+function posToPercentile(fp){if(fp==null)return null;return Math.max(5,Math.min(100,Math.round(100-(fp-1)*6)));}
+function pctColor(p){const h=Math.round(p*1.2);return`hsl(${h},80%,42%)`;}
+async function loadForm(){
+  let data=[];
+  try{data=await fetch('/sessions/form?type='+_type+'&last='+_last).then(r=>r.json());}catch(e){}
+  const el=document.getElementById('form-chart');
+  if(!data.length){el.innerHTML='<span style="color:#222;font-size:.7rem">No race data</span>';updateFormMeta([]);return;}
+  el.innerHTML=data.map(s=>{
+    const pct=posToPercentile(s.finish_pos);
+    const h=pct!=null?Math.round(pct+20):0;
+    const col=pct!=null?`hsl(${h},70%,38%)`:'#1a1a1a';
+    const ht=pct!=null?(pct+'% &bull; P'+s.finish_pos+' &bull; '+(s.track||'?')):'(no pos) &bull; '+(s.track||'?');
+    const hpct=pct!=null?pct:20;
+    return`<div class="bar" style="height:${hpct}%;background:${col}" title="">
+      <div class="bar-tip">${ht}</div>
+    </div>`;
+  }).join('');
+  updateFormMeta(data);
+}
+function updateFormMeta(data){
+  const el=document.getElementById('form-trend');
+  const pctEl=document.getElementById('form-pct');
+  const noteEl=document.getElementById('form-note');
+  const withPos=data.filter(s=>s.finish_pos!=null);
+  if(!withPos.length){el.textContent='—';el.className='form-trend fl';pctEl.textContent='';noteEl.textContent='';return;}
+  const pcts=withPos.map(s=>posToPercentile(s.finish_pos));
+  const avg=pcts.reduce((a,b)=>a+b,0)/pcts.length;
+  const half=Math.floor(pcts.length/2);
+  const first=pcts.slice(0,half),second=pcts.slice(half);
+  const avgFirst=first.length?first.reduce((a,b)=>a+b,0)/first.length:avg;
+  const avgSecond=second.length?second.reduce((a,b)=>a+b,0)/second.length:avg;
+  const diff=avgSecond-avgFirst;
+  if(diff>4){el.textContent='▲ Improving';el.className='form-trend up';}
+  else if(diff<-4){el.textContent='▼ Declining';el.className='form-trend dn';}
+  else{el.textContent='— Steady';el.className='form-trend fl';}
+  pctEl.textContent='Top '+Math.round(100-avg)+'% avg finish';
+  noteEl.textContent=withPos.length+' sessions with position data';
+}
+
+// ── Filter toggles ────────────────────────────────────────────
+document.getElementById('type-filters').addEventListener('click',e=>{
+  const b=e.target.closest('.ftog');if(!b)return;
+  document.querySelectorAll('#type-filters .ftog').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on');_type=b.dataset.val;loadForm();
+});
+document.getElementById('last-filters').addEventListener('click',e=>{
+  const b=e.target.closest('.ftog');if(!b)return;
+  document.querySelectorAll('#last-filters .ftog').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on');_last=+b.dataset.val;loadForm();
+});
+
+// ── Pills + circuit table ─────────────────────────────────────
+async function loadTracks(){
+  let tracks=[];
+  try{tracks=await fetch('/sessions/tracks').then(r=>r.json());}catch(e){}
+  // pills
+  const pr=document.getElementById('pills-row');
+  const withLap=tracks.filter(t=>t.best_lap_time_s);
+  if(withLap.length){
+    pr.innerHTML=withLap.map(t=>`
+      <div class="pill" onclick="location.href='/sessions/track?name='+encodeURIComponent('${t.track.replace(/'/g,"\\'")}')">
+        <div class="pill-circuit">${t.track}</div>
+        <div class="pill-time">${fmtLap(t.best_lap_time_s)}</div>
+      </div>`).join('');
+  } else {pr.innerHTML='<span style="color:#222;font-size:.7rem">No lap data yet</span>';}
+  // table
+  const tbody=document.getElementById('circuit-tbody');
+  if(!tracks.length){tbody.innerHTML='<tr><td colspan="5" style="color:#222;padding:20px 12px">No sessions yet</td></tr>';return;}
+  tbody.innerHTML=tracks.map(t=>{
+    const trend=t.trend==='up'?'<span class="td-trend-up">▲</span>':t.trend==='dn'?'<span class="td-trend-dn">▼</span>':'<span class="td-trend-fl">—</span>';
+    const esc=t.track.replace(/'/g,"\\'");
+    return`<tr onclick="location.href='/sessions/track?name='+encodeURIComponent('${esc}')">
+      <td class="td-track">${t.track}</td>
+      <td class="td-num">${t.session_count}</td>
+      <td class="td-blue">—</td>
+      <td class="td-amber">${fmtLap(t.best_lap_time_s)}</td>
+      <td>${trend}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Game cards ────────────────────────────────────────────────
+function sparkSVG(vals){
+  if(!vals||!vals.length)return'';
+  const w=120,h=28,pad=2;
+  const mn=Math.min(...vals),mx=Math.max(...vals),rng=mx-mn||1;
+  const xs=vals.map((_,i)=>pad+(w-pad*2)*i/Math.max(vals.length-1,1));
+  const ys=vals.map(v=>h-pad-(h-pad*2)*(v-mn)/rng);
+  const pts=xs.map((x,i)=>x+','+ys[i]).join(' ');
+  return`<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" class="gc-spark">
+    <polyline points="${pts}" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" opacity=".7"/>
+  </svg>`;
+}
+async function loadGames(){
   let games=[];
   try{games=await fetch('/sessions/games').then(r=>r.json());}catch(e){}
-  const grid=document.getElementById('grid');
-  if(!games.length){grid.innerHTML='<div style="color:#333;padding:24px">No sessions recorded yet</div>';return;}
-  grid.innerHTML=games.map((g,i)=>{
-    const label=GAME_LABELS[g.game]||g.game;
-    const desc=GAME_DESC[g.game]||'';
+  const grid=document.getElementById('games-grid');
+  if(!games.length){grid.innerHTML='<div style="color:#222;padding:20px">No sessions</div>';return;}
+  grid.innerHTML=games.map(g=>{
+    const label=GL[g.game]||g.game;
+    const desc=GD[g.game]||'';
     const empty=!g.session_count;
     const last=fmtDate(g.last_played);
-    return `<div class="gc${empty?' empty':''}" data-i="${i}">
+    const spark=sparkSVG(g.spark||[]);
+    return`<div class="gc${empty?' empty':''}" onclick="${empty?'':'location.href=\\'/sessions/game?name=\\'+encodeURIComponent(\\''+g.game+'\\')'}">
       <div class="gc-name">${label}</div>
       <div class="gc-desc">${desc}</div>
       <div class="gc-stats">
         <div class="gc-stat"><div class="v">${g.session_count||0}</div><div class="l">Sessions</div></div>
-        <div class="gc-stat"><div class="v">${g.track_count||0}</div><div class="l">Tracks</div></div>
+        <div class="gc-stat"><div class="v">${g.track_count||0}</div><div class="l">Circuits</div></div>
       </div>
-      ${last?`<div class="gc-last">Last played ${last}</div>`:'<div class="gc-last">No sessions yet</div>'}
+      ${g.best_lap_time_s?`<div class="gc-best">${fmtLap(g.best_lap_time_s)} <span>at ${g.best_lap_track||'?'}</span></div>`:''}
+      ${spark}
+      <div class="gc-last">${last?('Last: '+last+(g.last_played_track?' &bull; '+g.last_played_track:'')):'No sessions yet'}</div>
     </div>`;
   }).join('');
-  document.querySelectorAll('.gc:not(.empty)').forEach((el,i)=>{
-    const game=games.filter(g=>g.session_count)[i]||games[i];
-    el.addEventListener('click',()=>location.href='/sessions/game?name='+encodeURIComponent(game.game));
-  });
-  // wire non-empty in order
-  let ni=0;
-  games.forEach(g=>{
-    if(!g.session_count) return;
-    const el=document.querySelectorAll('.gc:not(.empty)')[ni++];
-    if(el) el.addEventListener('click',()=>location.href='/sessions/game?name='+encodeURIComponent(g.game));
-  });
 }
-init();
+
+// ── Recent feed ───────────────────────────────────────────────
+async function loadRecent(){
+  let sessions=[];
+  try{sessions=await fetch('/sessions/recent').then(r=>r.json());}catch(e){}
+  const feed=document.getElementById('recent-feed');
+  if(!sessions.length){feed.innerHTML='<div style="color:#222;padding:20px">No sessions yet</div>';return;}
+  feed.innerHTML=sessions.map(s=>{
+    const game=s.game==='forza_motorsport'?'forza':s.game==='forza_horizon_5'?'forza':s.game||'?';
+    const label=(GL[s.game]||s.game||'?').toUpperCase();
+    const fp=s.finish_pos,gp=s.grid_pos;
+    let posHtml='';
+    if(fp!=null){
+      const cls=fp===1?'p1':fp<=3?'podium':'ok';
+      posHtml=`<span class="recent-pos ${cls}">P${fp}</span>`;
+    }
+    let gainedHtml='';
+    if(fp!=null&&gp!=null){
+      const g=gp-fp;
+      const cls=g>0?'pos':g<0?'neg':'neu';
+      gainedHtml=`<span class="recent-gained ${cls}">${g>0?'+':''}${g}</span>`;
+    }
+    const href="/sessions/session?id="+encodeURIComponent(s.session_id)+"&game="+encodeURIComponent(s.game||'')+"&track="+encodeURIComponent(s.track||'');
+    return`<div class="recent-row" onclick="location.href='${href}'">
+      <span class="recent-badge ${game}">${label}</span>
+      <span class="recent-circuit">${s.track||'Unknown'}</span>
+      <span class="recent-date">${fmtRel(s.started_at)}</span>
+      <span class="recent-lap">${fmtLap(s.best_lap_time_s)}</span>
+      ${posHtml}
+      ${gainedHtml}
+    </div>`;
+  }).join('');
+}
+
+// ── Boot ──────────────────────────────────────────────────────
+Promise.all([loadKPIs(),loadForm(),loadTracks(),loadGames(),loadRecent()]);
 </script>
 </body>
 </html>
@@ -2765,10 +3060,10 @@ input[type=checkbox]{accent-color:var(--accent);width:12px;height:12px;flex-shri
 .lsb-t{font-size:.88rem;font-weight:900;font-variant-numeric:tabular-nums;width:80px;flex-shrink:0}
 .lsb-s{font-size:.66rem;color:var(--n-400);font-variant-numeric:tabular-nums}
 .lsb-d{font-size:.76rem;font-variant-numeric:tabular-nums;margin-left:auto}
-.lsb-slip{font-size:.64rem;color:var(--n-500)}
+.lsb-slip{font-size:1rem;color:var(--n-500)}
 .panel-wrap{margin-bottom:2px}
 .panel-lbl-row{display:flex;align-items:center;margin-bottom:1px;min-height:14px; font-size:1rem}
-.p-lbl{font-size:.56rem;color:var(--n-500);text-transform:uppercase;letter-spacing:1.5px}
+.p-lbl{font-size:1rem;color:var(--n-500);text-transform:uppercase;letter-spacing:1.5px}
 .panel-svg-wrap{position:relative;overflow:hidden;border:1px solid var(--border-sub);border-radius:2px;background:var(--bg-raised);cursor:crosshair}
 .panel-svg-wrap.panning{cursor:grab}
 .chart-zoom-ctrl{position:absolute;top:4px;right:4px;display:flex;gap:3px;z-index:10;pointer-events:auto}
@@ -3991,7 +4286,9 @@ def _db_init():
                     lap_count        INTEGER DEFAULT 0,
                     ai_analysis      TEXT,
                     ai_analyzed_at   TEXT,
-                    ai_model         TEXT
+                    ai_model         TEXT,
+                    grid_pos         INTEGER,
+                    finish_pos       INTEGER
                 );
                 CREATE TABLE IF NOT EXISTS laps (
                     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -4041,6 +4338,13 @@ def _db_init():
                 CREATE INDEX IF NOT EXISTS idx_track_refs_track ON track_references(track);
             """)
             conn.commit()
+            # Add columns introduced after initial schema — safe to re-run
+            for col, defn in [("grid_pos", "INTEGER"), ("finish_pos", "INTEGER")]:
+                try:
+                    conn.execute(f"ALTER TABLE sessions ADD COLUMN {col} {defn}")
+                    conn.commit()
+                except Exception:
+                    pass
         finally:
             conn.close()
     _db_migrate()
@@ -4112,15 +4416,17 @@ def _db_write_session(session_data: dict):
             conn.execute("""
                 INSERT OR REPLACE INTO sessions
                 (session_id,game,track,car,session_type,race_type,
-                 started_at,ended_at,packet_count,best_lap_time_s,lap_count)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                 started_at,ended_at,packet_count,best_lap_time_s,lap_count,
+                 grid_pos,finish_pos)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (sid,
                   session_data.get("game"), session_data.get("track"),
                   session_data.get("car"), session_data.get("session_type"),
                   session_data.get("race_type"),
                   session_data.get("started_at"), session_data.get("ended_at"),
                   session_data.get("packet_count", 0), session_data.get("best_lap_time_s"),
-                  len(laps)))
+                  len(laps),
+                  session_data.get("grid_pos"), session_data.get("finish_pos")))
             conn.execute("DELETE FROM laps WHERE session_id=?", (sid,))
             for lap in laps:
                 conn.execute("""
@@ -4165,11 +4471,94 @@ def _db_games_index() -> list:
             result = []
             for g in all_games:
                 r = by_game.get(g, {"game": g, "session_count": 0, "track_count": 0, "last_played": None})
+                # Best lap for this game + track it was set at
+                bl = conn.execute("""
+                    SELECT best_lap_time_s, track FROM sessions
+                    WHERE game=? AND best_lap_time_s IS NOT NULL
+                    ORDER BY best_lap_time_s ASC LIMIT 1
+                """, (g,)).fetchone()
+                r["best_lap_time_s"] = bl["best_lap_time_s"] if bl else None
+                r["best_lap_track"]  = bl["track"] if bl else None
+                # Last played track
+                lp = conn.execute(
+                    "SELECT track FROM sessions WHERE game=? ORDER BY started_at DESC LIMIT 1", (g,)
+                ).fetchone()
+                r["last_played_track"] = lp["track"] if lp else None
+                # Spark — last 8 race best laps (non-null, newest first)
+                spark_rows = conn.execute("""
+                    SELECT best_lap_time_s FROM sessions
+                    WHERE game=? AND best_lap_time_s IS NOT NULL
+                    ORDER BY started_at DESC LIMIT 8
+                """, (g,)).fetchall()
+                r["spark"] = [s[0] for s in reversed(spark_rows)]
                 result.append(r)
-            # sort present-first, then by last_played
             result.sort(key=lambda x: (x["last_played"] is None, x["last_played"] or ""), reverse=False)
             result.sort(key=lambda x: x["last_played"] is None)
             return result
+        finally:
+            conn.close()
+
+def _db_career_kpis() -> dict:
+    """Return career-level KPI aggregates for the sessions home page."""
+    with _db_lock:
+        conn = _db_connect()
+        try:
+            row = conn.execute("""
+                SELECT
+                  COUNT(*) as total_sessions,
+                  SUM(CASE WHEN race_type='real' THEN 1 ELSE 0 END) as real_count,
+                  SUM(CASE WHEN race_type='ai'   THEN 1 ELSE 0 END) as ai_count,
+                  AVG(CASE WHEN race_type='real' AND session_type='race' AND finish_pos IS NOT NULL
+                           THEN CAST(finish_pos AS REAL) END) as avg_finish_real,
+                  AVG(CASE WHEN race_type='real' AND session_type='race'
+                                AND grid_pos IS NOT NULL AND finish_pos IS NOT NULL
+                           THEN CAST(grid_pos AS REAL) - finish_pos END) as avg_pos_gained,
+                  100.0 * SUM(CASE WHEN race_type='real' AND session_type='race' AND finish_pos=1 THEN 1 ELSE 0 END)
+                        / NULLIF(SUM(CASE WHEN race_type='real' AND session_type='race'
+                                         AND finish_pos IS NOT NULL THEN 1 ELSE 0 END), 0) as win_rate,
+                  100.0 * SUM(CASE WHEN race_type='real' AND session_type='race' AND finish_pos<=3 THEN 1 ELSE 0 END)
+                        / NULLIF(SUM(CASE WHEN race_type='real' AND session_type='race'
+                                         AND finish_pos IS NOT NULL THEN 1 ELSE 0 END), 0) as podium_rate,
+                  SUM(lap_count) as total_laps,
+                  COUNT(DISTINCT CASE WHEN track IS NOT NULL AND track != 'unknown' THEN track END) as circuit_count
+                FROM sessions
+            """).fetchone()
+            return dict(row) if row else {}
+        finally:
+            conn.close()
+
+def _db_form_data(race_type_filter: Optional[str] = None, last_n: int = 10) -> list:
+    """Return last N race sessions for the Current Form bar chart."""
+    with _db_lock:
+        conn = _db_connect()
+        try:
+            where = "WHERE session_type='race'"
+            params: list = []
+            if race_type_filter and race_type_filter != "all":
+                where += " AND race_type=?"
+                params.append(race_type_filter)
+            params.append(last_n)
+            rows = conn.execute(f"""
+                SELECT session_id, track, started_at, finish_pos, grid_pos,
+                       best_lap_time_s, lap_count, race_type, game
+                FROM sessions {where}
+                ORDER BY started_at DESC LIMIT ?
+            """, params).fetchall()
+            return [dict(r) for r in reversed(rows)]
+        finally:
+            conn.close()
+
+def _db_recent_sessions(limit: int = 8) -> list:
+    """Return last N sessions across all games for the recent feed."""
+    with _db_lock:
+        conn = _db_connect()
+        try:
+            rows = conn.execute("""
+                SELECT session_id, game, track, started_at, best_lap_time_s,
+                       lap_count, finish_pos, grid_pos, race_type, session_type
+                FROM sessions ORDER BY started_at DESC LIMIT ?
+            """, (limit,)).fetchall()
+            return [dict(r) for r in rows]
         finally:
             conn.close()
 
@@ -4954,6 +5343,23 @@ async def handle_status(reader, writer):
 
         elif path == "/sessions/games":
             result = _db_games_index()
+            writer.write(_http_response("200 OK", "application/json", json.dumps(result).encode()))
+
+        elif path == "/sessions/career":
+            result = _db_career_kpis()
+            writer.write(_http_response("200 OK", "application/json", json.dumps(result).encode()))
+
+        elif path == "/sessions/form":
+            qs = {k: urllib.parse.unquote_plus(v)
+                  for pair in query_string.split("&") if "=" in pair
+                  for k, v in [pair.split("=", 1)]}
+            rt   = qs.get("type", "all") or "all"
+            last = int(qs.get("last", "10") or "10")
+            result = _db_form_data(rt if rt != "all" else None, last)
+            writer.write(_http_response("200 OK", "application/json", json.dumps(result).encode()))
+
+        elif path == "/sessions/recent":
+            result = _db_recent_sessions(8)
             writer.write(_http_response("200 OK", "application/json", json.dumps(result).encode()))
 
         elif path == "/sessions/tracks":
