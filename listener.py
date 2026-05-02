@@ -1092,8 +1092,8 @@ _CSS_TOKENS = """
   --text:         #e0e0e0;
   --text-head:    #ffffff;
   --text-label:   lightgrey;
-  --text-muted:   #555555;
-  --text-dim:     #333333;
+  --text-muted:   lightgrey;
+  --text-dim:     lightgrey;
   --text-ghost:   #222222;
   /* Accent — green */
   --accent:       #00ff41;
