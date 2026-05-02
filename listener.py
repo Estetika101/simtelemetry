@@ -1,5 +1,5 @@
 """
-SimTelemetry Listener
+Pacefinder Listener
 Supports: Forza Motorsport, Assetto Corsa Competizione, F1 (Codemasters 2023/2024)
 Listens on all three ports simultaneously, auto-detects game from packet size/id.
 Saves raw archives and structured JSON sessions to USB storage.
@@ -93,7 +93,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[_log_handler, logging.StreamHandler()],
 )
-log = logging.getLogger("simtelemetry")
+log = logging.getLogger("pacefinder")
 
 # ─── Debug Console ────────────────────────────────────────────────────────────
 
@@ -1117,10 +1117,10 @@ _CSS_TOKENS = """
   --n-800: #111111;
   --n-700: #1a1a1a;
   --n-600: #2a2a2a;
-  --n-500: #333333;
-  --n-400: #444444;
-  --n-300: #555555;
-  --n-200: #888888;
+  --n-500: #lightgrey;
+  --n-400: #lightgrey;
+  --n-300: #lightgrey;
+  --n-200: #lightgrey;
   --n-100: #aaaaaa;
   /* Text size scale */
   --text-2xs: .6rem;
@@ -1250,7 +1250,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>SimTelemetry</title>
+<title>Pacefinder</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden}
@@ -1287,7 +1287,7 @@ body{background:var(--bg);color:var(--text-head);font-family:'Courier New',monos
 .panels{flex:1;display:flex;min-height:0;overflow:hidden}
 .panel-col{flex:1;display:flex;flex-direction:column;padding:var(--sp-3) 14px;border-right:1px solid var(--border-sub);min-width:0}
 .panel-col:last-child{border-right:none}
-.p-lbl{font-size:var(--text-md);color:var(--text-label);text-transform:uppercase;letter-spacing:3px;margin-bottom:10px;flex:none}
+.p-lbl{font-size:var(--text-lg);color:var(--text-label);text-transform:uppercase;letter-spacing:3px;margin-bottom:10px;flex:none}
 
 /* vertical bars — throttle / brake */
 .vbar-wrap{flex:1;background:var(--bg-surface);border-radius:3px;position:relative;overflow:hidden;margin-bottom:var(--sp-3);min-height:0}
@@ -1860,12 +1860,12 @@ SETUP_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SimTelemetry · Setup</title>
+<title>Pacefinder · Setup</title>
 """ + _PAGE_STYLE + r"""
 </head>
 <body>
 <div class="topbar">
-  <h1>SimTelemetry</h1>
+  <h1>Pacefinder</h1>
   <nav>
     <a href="/">Live</a>
     <a href="/sessions">Sessions</a>
@@ -2093,12 +2093,12 @@ ADMIN_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SimTelemetry · Admin</title>
+<title>Pacefinder · Admin</title>
 """ + _PAGE_STYLE + r"""
 </head>
 <body>
 <div class="topbar">
-  <h1>SimTelemetry</h1>
+  <h1>Pacefinder</h1>
   <nav>
     <a href="/">Live</a>
     <a href="/sessions">Sessions</a>
@@ -2294,7 +2294,7 @@ GAMES_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>SimTelemetry &middot; Sessions</title>
+<title>Pacefinder &middot; Sessions</title>
 <style>
 """ + _CSS_TOKENS + """
 *{box-sizing:border-box;margin:0;padding:0}
@@ -2324,7 +2324,7 @@ a{color:inherit;text-decoration:none}
 </head>
 <body>
 <div class="tb">
-  <h1>SimTelemetry</h1>
+  <h1>Pacefinder</h1>
   <nav class="tb-nav">
     <a href="/">Live</a>
     <a href="/sessions" class="cur">Sessions</a>
@@ -2384,7 +2384,7 @@ TRACKS_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>SimTelemetry &middot; Tracks</title>
+<title>Pacefinder &middot; Tracks</title>
 <style>
 """ + _CSS_TOKENS + """
 *{box-sizing:border-box;margin:0;padding:0}
@@ -2418,7 +2418,7 @@ a{color:inherit;text-decoration:none}
 </head>
 <body>
 <div class="tb">
-  <h1>SimTelemetry</h1>
+  <h1>Pacefinder</h1>
   <nav class="tb-nav">
     <a href="/">Live</a>
     <a href="/sessions" class="cur">Sessions</a>
@@ -2446,7 +2446,7 @@ async function init(){
   const label=GAME_LABELS[_game]||_game||'All';
   document.getElementById('bc-game').textContent=label;
   document.getElementById('page-title').textContent=label+' Tracks';
-  document.title='SimTelemetry · '+label;
+  document.title='Pacefinder · '+label;
   const url='/sessions/tracks'+(_game?'?game='+encodeURIComponent(_game):'');
   try{_tracks=await fetch(url).then(r=>r.json());}catch(e){_tracks=[];}
   const grid=document.getElementById('grid');
@@ -2490,7 +2490,7 @@ TRACK_DETAIL_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>SimTelemetry &middot; Track</title>
+<title>Pacefinder &middot; Track</title>
 <style>
 """ + _CSS_TOKENS + """
 *{box-sizing:border-box;margin:0;padding:0}
@@ -2539,7 +2539,7 @@ td.date-col{color:var(--text)}
 </head>
 <body>
 <div class="tb">
-  <h1>SimTelemetry</h1>
+  <h1>Pacefinder</h1>
   <nav class="tb-nav">
     <a href="/">Live</a>
     <a href="/sessions" class="cur">Sessions</a>
@@ -2596,7 +2596,7 @@ let _sessions=[];
 async function init(){
   if(!_track){location.href='/sessions';return;}
   document.getElementById('bc-track').textContent=_track;
-  document.title='SimTelemetry · '+_track;
+  document.title='Pacefinder · '+_track;
   const bcGame=document.getElementById('bc-game');
   const bcSep=document.getElementById('bc-sep');
   if(_game&&bcGame){
@@ -2719,7 +2719,7 @@ TELEMETRY_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>SimTelemetry &middot; Telemetry</title>
+<title>Pacefinder &middot; Telemetry</title>
 <style>
 """ + _CSS_TOKENS + """
 *{box-sizing:border-box;margin:0;padding:0}
@@ -2751,8 +2751,6 @@ input[type=checkbox]{accent-color:var(--accent);width:12px;height:12px;flex-shri
 .xmode-btn{flex:1;background:var(--surface);border:1px solid var(--surface-bd);color:var(--text-muted);font-family:inherit;font-size:.7rem;padding:4px 0;border-radius:3px;cursor:pointer;text-align:center}
 .xmode-btn.active{background:var(--accent-bg);border-color:var(--accent-bd);color:var(--accent-soft)}
 .ctrl-sel{width:100%;background:var(--surface);border:1px solid var(--surface-bd);color:var(--text);font-family:inherit;font-size:.74rem;padding:5px 6px;border-radius:4px}
-.btn-reset-zoom{width:100%;background:none;border:1px solid var(--surface-bd);color:var(--text-muted);font-family:inherit;font-size:.7rem;padding:5px;border-radius:3px;cursor:pointer}
-.btn-reset-zoom:hover{border-color:var(--n-300);color:var(--text)}
 .panels-col{flex:1;min-width:0;padding:var(--sp-3) var(--sp-4) var(--sp-6)}
 .sector-hdr{margin-bottom:var(--sp-3);border:1px solid var(--border-sub);border-radius:4px;background:var(--bg-raised);overflow:hidden}
 .s-hdr-row{display:flex;align-items:center;padding:4px var(--sp-3);gap:var(--sp-2);border-bottom:1px solid var(--border-faint);font-size:.68rem}
@@ -2772,6 +2770,10 @@ input[type=checkbox]{accent-color:var(--accent);width:12px;height:12px;flex-shri
 .panel-lbl-row{display:flex;align-items:center;margin-bottom:1px;min-height:14px; font-size:1rem}
 .p-lbl{font-size:.56rem;color:var(--n-500);text-transform:uppercase;letter-spacing:1.5px}
 .panel-svg-wrap{position:relative;overflow:hidden;border:1px solid var(--border-sub);border-radius:2px;background:var(--bg-raised);cursor:crosshair}
+.panel-svg-wrap.panning{cursor:grab}
+.chart-zoom-ctrl{position:absolute;top:4px;right:4px;display:flex;gap:3px;z-index:10;pointer-events:auto}
+.czc-btn{background:rgba(20,20,28,.75);border:1px solid var(--surface-bd);color:var(--text-muted);font-family:inherit;font-size:.65rem;padding:2px 7px;border-radius:3px;cursor:pointer;line-height:1.5;backdrop-filter:blur(4px)}
+.czc-btn:hover{border-color:var(--n-300);color:var(--text)}
 .panel-svg-wrap svg{display:block;width:100%}
 .px-line{position:absolute;top:0;bottom:0;width:1px;background:rgba(255,255,255,.16);pointer-events:none;display:none}
 #tele-tip{position:fixed;background:var(--surface);border:1px solid var(--surface-bd);color:var(--text);font-size:.68rem;padding:5px 10px;border-radius:4px;pointer-events:none;display:none;z-index:200;white-space:pre;line-height:1.7;font-family:'Courier New',monospace;min-width:160px}
@@ -2786,7 +2788,7 @@ input[type=checkbox]{accent-color:var(--accent);width:12px;height:12px;flex-shri
 </head>
 <body>
 <div class="tb">
-  <h1>SimTelemetry</h1>
+  <h1>Pacefinder</h1>
   <nav class="tb-nav">
     <a href="/">Live</a><a href="/sessions" class="cur">Sessions</a><a href="/setup">Setup</a>
     <a href="/admin" id="nav-admin" style="display:none">Admin</a>
@@ -2835,9 +2837,6 @@ input[type=checkbox]{accent-color:var(--accent);width:12px;height:12px;flex-shri
         <button class="xmode-btn" id="xm-time" onclick="setXMode('time')">Time</button>
       </div>
     </div>
-    <div class="ctrl-section">
-      <button class="btn-reset-zoom" onclick="resetZoom()">Reset Zoom</button>
-    </div>
   </div>
 </div>
 <div class="panels-col">
@@ -2846,6 +2845,11 @@ input[type=checkbox]{accent-color:var(--accent);width:12px;height:12px;flex-shri
     <div id="sector-hdr" class="sector-hdr"></div>
     <div id="lap-summaries" class="lap-summaries"></div>
     <div id="charts-area" style="position:relative">
+      <div class="chart-zoom-ctrl">
+        <button class="czc-btn" onclick="resetZoom()">Reset</button>
+        <button class="czc-btn" onclick="stepZoom(-1)">−</button>
+        <button class="czc-btn" onclick="stepZoom(1)">+</button>
+      </div>
       <div id="drag-sel"></div>
       <div id="panel-delta" class="panel-wrap"></div>
       <div id="panel-speed" class="panel-wrap"></div>
@@ -2880,6 +2884,7 @@ let _xMode='distance';
 let _zoom=[0,1];
 let _maxT=1;
 let _dragging=false,_dragX0=0;
+let _spaceDown=false,_panning=false,_panX0=0,_panZoom0=[0,1];
 let _tmCx=null,_tmCy=null;
 const LAP_COLORS=['#4a9aef','#22c55e','#f59e0b','#a855f7'];
 const REF_COL='#777777';
@@ -3290,19 +3295,24 @@ function setupInteraction(){
   const tip=$('tele-tip');
   area.onmousemove=e=>{
     const wrap=e.target.closest('.panel-svg-wrap');
+    if(_panning){
+      const aRect=area.getBoundingClientRect();
+      const dx=(e.clientX-_panX0)/aRect.width;
+      const range=_panZoom0[1]-_panZoom0[0];
+      let lo=_panZoom0[0]-dx*range,hi=_panZoom0[1]-dx*range;
+      if(lo<0){hi-=lo;lo=0;}if(hi>1){lo-=hi-1;hi=1;}
+      _zoom=[lo,hi];renderAll();
+      return;
+    }
     if(!wrap){hideX();return;}
     const rect=wrap.getBoundingClientRect();
     const xFrac=Math.max(0,Math.min(1,(e.clientX-rect.left)/rect.width));
-    // Crosshair lines
     area.querySelectorAll('.px-line').forEach(l=>{l.style.left=(xFrac*100)+'%';l.style.display='';});
-    // Normalised data position
     const pos=_zoom[0]+xFrac*(_zoom[1]-_zoom[0]);
     updateTrackDot(pos);
-    // Tooltip
     const lines=[];
     _selectedLaps.forEach((ln,ci)=>{
       const s=_lapSamples[ln];if(!s)return;
-      const col=LAP_COLORS[ci];
       const sp=(interpAt(s,pos,'speed_mph')||0).toFixed(0);
       const th=(interpAt(s,pos,'throttle_pct')||0).toFixed(0);
       const br=(interpAt(s,pos,'brake_pct')||0).toFixed(0);
@@ -3328,13 +3338,23 @@ function setupInteraction(){
       sel.style.display='block';
     }
   };
-  area.onmouseleave=hideX;
+  area.onmouseleave=e=>{if(!_panning)hideX();};
   area.onmousedown=e=>{
     if(!e.target.closest('.panel-svg-wrap'))return;
     e.preventDefault();
+    if(_spaceDown){
+      _panning=true;_panX0=e.clientX;_panZoom0=[..._zoom];
+      area.querySelectorAll('.panel-svg-wrap').forEach(w=>w.classList.add('panning'));
+      return;
+    }
     _dragging=true;_dragX0=e.clientX-area.getBoundingClientRect().left;
   };
   area.onmouseup=e=>{
+    if(_panning){
+      _panning=false;
+      area.querySelectorAll('.panel-svg-wrap').forEach(w=>w.classList.remove('panning'));
+      return;
+    }
     if(!_dragging)return;_dragging=false;
     const aRect=area.getBoundingClientRect();
     const w=aRect.width;
@@ -3345,12 +3365,30 @@ function setupInteraction(){
     const nLo=lo+Math.min(f0,f1)*range,nHi=lo+Math.max(f0,f1)*range;
     if(nHi-nLo>0.01){_zoom=[nLo,nHi];renderAll();}
   };
+  document.addEventListener('keydown',e=>{
+    if(e.code==='Space'&&!e.target.matches('input,textarea,select')){
+      e.preventDefault();_spaceDown=true;
+      area.querySelectorAll('.panel-svg-wrap').forEach(w=>w.classList.add('panning'));
+    }
+  });
+  document.addEventListener('keyup',e=>{
+    if(e.code==='Space'){
+      _spaceDown=false;
+      if(!_panning)area.querySelectorAll('.panel-svg-wrap').forEach(w=>w.classList.remove('panning'));
+    }
+  });
 }
 function hideX(){
   document.querySelectorAll('.px-line').forEach(l=>l.style.display='none');
   $('tele-tip').style.display='none';
 }
 function resetZoom(){_zoom=[0,1];renderAll();}
+function stepZoom(dir){
+  const lo=_zoom[0],hi=_zoom[1],mid=(lo+hi)/2,range=hi-lo;
+  const nRange=dir>0?range*0.6:range/0.6;
+  const nLo=Math.max(0,mid-nRange/2),nHi=Math.min(1,mid+nRange/2);
+  if(nHi-nLo>0.005){_zoom=[nLo,nHi];renderAll();}
+}
 function setXMode(m){
   _xMode=m;
   $('xm-dist').classList.toggle('active',m==='distance');
@@ -3421,7 +3459,7 @@ async function init(){
   const track=(_sess.track&&_sess.track!=='unknown')?_sess.track:(_strack||'Unknown');
   const game=_sgame||_sess.game||'';
   const GL={'forza_motorsport':'Forza','acc':'ACC','f1':'F1'};
-  document.title='SimTelemetry · '+track+' Telemetry';
+  document.title='Pacefinder · '+track+' Telemetry';
   if(game){const b=$('bc-game');b.textContent=GL[game]||game;b.href='/sessions/game?name='+encodeURIComponent(game);b.style.display='';$('bc-gsep').style.display='';}
   $('bc-track').textContent=track;
   $('bc-track').href='/sessions/track?name='+encodeURIComponent(track)+(game?'&game='+encodeURIComponent(game):'');
@@ -3465,7 +3503,7 @@ SESSION_DETAIL_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>SimTelemetry &middot; Session</title>
+<title>Pacefinder &middot; Session</title>
 <style>
 """ + _CSS_TOKENS + """
 *{box-sizing:border-box;margin:0;padding:0}
@@ -3528,7 +3566,7 @@ tr.best-row td:first-child{color:var(--accent-bd2)}
 </head>
 <body>
 <div class="tb">
-  <h1>SimTelemetry</h1>
+  <h1>Pacefinder</h1>
   <nav class="tb-nav">
     <a href="/">Live</a>
     <a href="/sessions" class="cur">Sessions</a>
@@ -3629,7 +3667,7 @@ function renderHeader(){
   const s=_sess;
   const track=s.track&&s.track!=='unknown'?s.track:(_strack||'Unknown Track');
   const game=_sgame||s.game||'';
-  document.title='SimTelemetry · '+track;
+  document.title='Pacefinder · '+track;
   if(game){
     const bg=document.getElementById('bc-game');
     bg.textContent=SGAME_LABELS[game]||game;
@@ -5399,7 +5437,7 @@ async def main():
     ensure_storage()
     _db_init()
     threading.Thread(target=_backfill_lap_samples, daemon=True).start()
-    log.info("SimTelemetry listener starting...")
+    log.info("Pacefinder listener starting...")
 
     loop = asyncio.get_event_loop()
 

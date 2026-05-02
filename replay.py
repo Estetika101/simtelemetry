@@ -1,5 +1,5 @@
 """
-replay.py — read a SimTelemetry .bin raw archive and re-parse it.
+replay.py — read a Pacefinder .bin raw archive and re-parse it.
 
 Usage:
     python3 replay.py <file.bin> [--game forza_motorsport|acc|f1] [--csv] [--summary]
@@ -138,7 +138,7 @@ def _write_csv(samples: list[dict]):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Replay a SimTelemetry .bin archive")
+    parser = argparse.ArgumentParser(description="Replay a Pacefinder .bin archive")
     parser.add_argument("file", type=Path, help=".bin archive to replay")
     parser.add_argument("--game", choices=list(PARSERS), default=None, help="Force game parser")
     parser.add_argument("--csv", action="store_true", help="Output CSV instead of JSON")

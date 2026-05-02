@@ -1,5 +1,5 @@
 [Unit]
-Description=SimTelemetry UDP Listener
+Description=Pacefinder UDP Listener
 After=network.target local-fs.target
 # Listener falls back to local storage if USB isn't mounted, so no hard USB dep.
 
