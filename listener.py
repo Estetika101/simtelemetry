@@ -1139,48 +1139,27 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 /* ── layout ── */
 .main{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden}
 
-/* ── ROW 1: GEAR · SPEED · RPM BAR ── */
-.row-hero{flex:0 0 auto;display:grid;grid-template-columns:1fr 1.2fr 2fr;min-height:0;border-bottom:1px solid #111}
-.hero-cell{display:flex;flex-direction:column;justify-content:center;align-items:center;padding:14px 10px}
-.hero-cell.rpmcell{align-items:stretch;padding:18px 22px;border-left:1px solid #111}
-.hero-lbl{font-size:1rem;color:#999;text-transform:uppercase;letter-spacing:3px;margin-bottom:4px}
-.gear-val{font-size:clamp(6rem,20vw,14rem);font-weight:900;line-height:1;color:#fff;letter-spacing:-4px}
-.gear-val.N{color:#444}
-.gear-val.R{color:#ef4444}
-.speed-val{font-size:clamp(4rem,11vw,8rem);font-weight:900;line-height:1;color:#fff;letter-spacing:-2px}
-.speed-unit{font-size:1.2rem;color:#999;text-transform:uppercase;letter-spacing:3px;margin-top:4px}
-.rpm-lbl-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
-.rpm-lbl{font-size:1rem;color:#999;text-transform:uppercase;letter-spacing:3px}
-.rpm-pct{font-size:1.3rem;font-weight:bold;color:#bbb}
-.rpm-track{flex:1;background:#0d0d0d;border-radius:3px;overflow:hidden;height:clamp(28px,5vh,48px);position:relative}
-.rpm-fill{height:100%;width:0%;transition:width .04s linear}
-.rpm-fill.lo  {background:#1a5c30}
-.rpm-fill.mid {background:#22c55e}
-.rpm-fill.hi  {background:#f59e0b}
-.rpm-fill.shift{background:#ef4444;animation:sf .1s infinite}
-@keyframes sf{0%,100%{box-shadow:inset 0 0 20px #ef000066}50%{box-shadow:inset 0 0 40px #ff440099}}
-.rpm-gear-mark{position:absolute;top:0;bottom:0;width:2px;background:#1a1a1a}
-.rpm-num{font-size:1.1rem;color:#888;margin-top:6px;text-align:right;letter-spacing:1px}
-/* speed split (hero top-right) */
-.hero-cell.speedcell{border-left:1px solid #111}
+/* ── flash animation ── */
+@keyframes flash-red{0%{box-shadow:inset 0 0 0 2px #ef4444aa}60%{box-shadow:inset 0 0 0 2px #ef444466}100%{box-shadow:inset 0 0 0 2px transparent}}
+.flash{animation:flash-red .35s ease-out forwards}
 
-/* ── ROW 2: PEDALS ── */
-.row-pedals{flex:none;border-bottom:1px solid #111;padding:12px 22px;display:flex;flex-direction:column;gap:10px}
-.pedal-row{display:flex;align-items:center;gap:14px}
+/* ── ROW 1: PEDALS (hero — moved up) ── */
+.row-pedals{flex:none;border-bottom:1px solid #111;padding:14px 22px;display:flex;flex-direction:column;gap:12px}
+.pedal-row{display:flex;align-items:center;gap:14px;border-radius:3px;padding:2px 4px;transition:background .1s}
 .pedal-lbl{font-size:1rem;color:#999;text-transform:uppercase;letter-spacing:2px;width:90px;flex:none}
-.pedal-track{flex:1;background:#0d0d0d;border-radius:2px;overflow:hidden;height:20px}
+.pedal-track{flex:1;background:#0d0d0d;border-radius:2px;overflow:hidden;height:26px}
 .pedal-fill{height:100%;width:0%;border-radius:2px;transition:width .04s linear}
 .thr-fill{background:#00ff41}
 .brk-fill{background:#ef4444}
-.pedal-pct{font-size:1.6rem;font-weight:900;width:60px;text-align:right;flex:none}
+.pedal-pct{font-size:1.8rem;font-weight:900;width:68px;text-align:right;flex:none}
 .thr-pct{color:#00ff41}
 .brk-pct{color:#ef4444}
 
-/* ── ROW 3: SLIP · TIMING ── */
+/* ── ROW 2: SLIP · TIMING ── */
 .row-mid{flex:none;display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid #111}
 
 /* slip panel */
-.slip-panel{padding:14px 22px;border-right:1px solid #111}
+.slip-panel{padding:14px 22px;border-right:1px solid #111;border-radius:3px}
 .panel-lbl{font-size:1rem;color:#999;text-transform:uppercase;letter-spacing:3px;margin-bottom:10px}
 .slip-row{display:flex;align-items:center;gap:12px;margin-bottom:8px}
 .slip-row:last-child{margin-bottom:0}
@@ -1193,29 +1172,52 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 /* timing panel */
 .timing-panel{padding:14px 22px}
 .timing-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px}
-.t-cell{}
 .t-lbl{font-size:.9rem;color:#999;text-transform:uppercase;letter-spacing:2px;margin-bottom:3px}
 .t-val{font-size:1.5rem;font-weight:900;color:#e0e0e0;letter-spacing:.5px}
 .t-val.green{color:#22c55e}
 .delta-row{grid-column:1/-1;margin-top:4px;padding-top:8px;border-top:1px solid #111;display:flex;align-items:baseline;gap:10px}
 .delta-lbl{font-size:.9rem;color:#999;text-transform:uppercase;letter-spacing:2px}
-.delta-val{font-size:1.8rem;font-weight:900;letter-spacing:-1px}
+.delta-val{font-size:1.8rem;font-weight:900;letter-spacing:-1px;border-radius:3px;padding:0 4px}
 .delta-val.ahead{color:#22c55e}
 .delta-val.behind{color:#ef4444}
 .delta-val.even{color:#888}
 
+/* ── ROW 3: GEAR · SPEED · RPM BAR (demoted — visible in cockpit) ── */
+.row-hero{flex:0 0 auto;display:grid;grid-template-columns:1fr 1.2fr 2fr;min-height:0;border-bottom:1px solid #111}
+.hero-cell{display:flex;flex-direction:column;justify-content:center;align-items:center;padding:10px 10px}
+.hero-cell.rpmcell{align-items:stretch;padding:14px 22px;border-left:1px solid #111}
+.hero-lbl{font-size:1rem;color:#555;text-transform:uppercase;letter-spacing:3px;margin-bottom:4px}
+.gear-val{font-size:clamp(4rem,14vw,9rem);font-weight:900;line-height:1;color:#888;letter-spacing:-4px}
+.gear-val.N{color:#333}
+.gear-val.R{color:#ef444488}
+.speed-val{font-size:clamp(3rem,8vw,5.5rem);font-weight:900;line-height:1;color:#888;letter-spacing:-2px}
+.speed-unit{font-size:1rem;color:#555;text-transform:uppercase;letter-spacing:3px;margin-top:4px}
+.rpm-lbl-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+.rpm-lbl{font-size:1rem;color:#555;text-transform:uppercase;letter-spacing:3px}
+.rpm-pct{font-size:1.1rem;font-weight:bold;color:#666}
+.rpm-track{flex:1;background:#0d0d0d;border-radius:3px;overflow:hidden;height:clamp(22px,4vh,36px);position:relative}
+.rpm-fill{height:100%;width:0%;transition:width .04s linear}
+.rpm-fill.lo  {background:#1a3a22}
+.rpm-fill.mid {background:#1a4a28}
+.rpm-fill.hi  {background:#3a3010}
+.rpm-fill.shift{background:#ef4444;animation:sf .1s infinite}
+@keyframes sf{0%,100%{box-shadow:inset 0 0 20px #ef000066}50%{box-shadow:inset 0 0 40px #ff440099}}
+.rpm-gear-mark{position:absolute;top:0;bottom:0;width:2px;background:#1a1a1a}
+.rpm-num{font-size:.95rem;color:#555;margin-top:5px;text-align:right;letter-spacing:1px}
+.hero-cell.speedcell{border-left:1px solid #111}
+
 /* ── ROW 4: TYRES ── */
 .row-tyres{flex:none;padding:10px 22px;display:flex;align-items:center;gap:20px;border-bottom:1px solid #0a0a0a}
-.tyres-lbl{font-size:1rem;color:#999;text-transform:uppercase;letter-spacing:3px;flex:none}
+.tyres-lbl{font-size:1rem;color:#555;text-transform:uppercase;letter-spacing:3px;flex:none}
 .tyre-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 16px}
 .tyre-cell{display:flex;align-items:center;gap:6px}
-.tyre-corner{font-size:.95rem;color:#aaa;letter-spacing:1px;width:26px;font-weight:bold}
+.tyre-corner{font-size:.95rem;color:#666;letter-spacing:1px;width:26px;font-weight:bold}
 .tyre-temp{font-size:1.1rem;font-weight:bold;min-width:52px;transition:color .2s}
 .tyre-temp.cold{color:#5b9bd5}
 .tyre-temp.ok  {color:#22c55e}
 .tyre-temp.hot {color:#f59e0b}
 .tyre-temp.over{color:#ef4444}
-.tyre-temp.na  {color:#333}
+.tyre-temp.na  {color:#222}
 
 /* ── bottom strip ── */
 .bot{flex:none;height:28px;display:flex;align-items:center;padding:0 14px;gap:10px}
@@ -1286,47 +1288,23 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 
 <div class="main">
 
-  <!-- ROW 1: GEAR · SPEED · RPM BAR -->
-  <div class="row-hero">
-    <div class="hero-cell">
-      <div class="hero-lbl">Gear</div>
-      <div class="gear-val" id="gear">—</div>
-    </div>
-    <div class="hero-cell speedcell">
-      <div class="hero-lbl">Speed</div>
-      <div class="speed-val" id="spd">—</div>
-      <div class="speed-unit">mph</div>
-    </div>
-    <div class="hero-cell rpmcell">
-      <div class="rpm-lbl-row">
-        <span class="rpm-lbl">RPM</span>
-        <span class="rpm-pct" id="rpm-pct">—</span>
-      </div>
-      <div class="rpm-track">
-        <div class="rpm-fill" id="rpm-fill"></div>
-        <div class="rpm-gear-mark" id="rpm-mark" style="left:75%"></div>
-      </div>
-      <div class="rpm-num" id="rpm-num">—</div>
-    </div>
-  </div>
-
-  <!-- ROW 2: PEDALS -->
+  <!-- ROW 1: PEDALS -->
   <div class="row-pedals">
-    <div class="pedal-row">
+    <div class="pedal-row" id="thr-row">
       <span class="pedal-lbl">Throttle</span>
       <div class="pedal-track"><div class="pedal-fill thr-fill" id="thr-b"></div></div>
       <span class="pedal-pct thr-pct" id="thr-v">0%</span>
     </div>
-    <div class="pedal-row">
+    <div class="pedal-row" id="brk-row">
       <span class="pedal-lbl">Brake</span>
       <div class="pedal-track"><div class="pedal-fill brk-fill" id="brk-b"></div></div>
       <span class="pedal-pct brk-pct" id="brk-v">0%</span>
     </div>
   </div>
 
-  <!-- ROW 3: SLIP · TIMING -->
+  <!-- ROW 2: SLIP · TIMING -->
   <div class="row-mid">
-    <div class="slip-panel">
+    <div class="slip-panel" id="slip-panel">
       <div class="panel-lbl">Rear Slip</div>
       <div class="slip-row">
         <span class="slip-corner">RL</span>
@@ -1365,6 +1343,30 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
           <span class="delta-val even" id="t-delta">—</span>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- ROW 3: GEAR · SPEED · RPM BAR (secondary — visible in cockpit) -->
+  <div class="row-hero">
+    <div class="hero-cell">
+      <div class="hero-lbl">Gear</div>
+      <div class="gear-val" id="gear">—</div>
+    </div>
+    <div class="hero-cell speedcell">
+      <div class="hero-lbl">Speed</div>
+      <div class="speed-val" id="spd">—</div>
+      <div class="speed-unit">mph</div>
+    </div>
+    <div class="hero-cell rpmcell">
+      <div class="rpm-lbl-row">
+        <span class="rpm-lbl">RPM</span>
+        <span class="rpm-pct" id="rpm-pct">—</span>
+      </div>
+      <div class="rpm-track">
+        <div class="rpm-fill" id="rpm-fill"></div>
+        <div class="rpm-gear-mark" id="rpm-mark" style="left:75%"></div>
+      </div>
+      <div class="rpm-num" id="rpm-num">—</div>
     </div>
   </div>
 
@@ -1439,6 +1441,16 @@ const es=new EventSource('/stream');
 let _maxRpm=8500,_dbgEs=null,_dbgOpen=false,_bestLap=null;
 let state_sid=null;
 const _dbgLines=[];
+const _flashTimers={};
+
+function flash(id){
+  const el=$(id); if(!el)return;
+  if(_flashTimers[id])clearTimeout(_flashTimers[id]);
+  el.classList.remove('flash');
+  void el.offsetWidth; // reflow to restart animation
+  el.classList.add('flash');
+  _flashTimers[id]=setTimeout(()=>el.classList.remove('flash'),400);
+}
 
 function fmt(s){
   if(s==null)return'—';
@@ -1516,10 +1528,16 @@ es.onmessage=e=>{
   $('thr-v').textContent=Math.round(thr)+'%';
   $('brk-b').style.width=brk+'%';
   $('brk-v').textContent=Math.round(brk)+'%';
+  // flash throttle row when braking and on throttle simultaneously (conflicting inputs)
+  if(brk>15&&thr>30) flash('thr-row');
+  // flash brake row at near-lock ABS territory
+  if(brk>92) flash('brk-row');
 
   // slip
   setSlip('srl',d.slip_rl);
   setSlip('srr',d.slip_rr);
+  // flash slip panel on oversteer threshold
+  if((d.slip_rl||0)>0.3||(d.slip_rr||0)>0.3) flash('slip-panel');
 
   // timing
   $('t-cur').textContent=fmt(d.current_lap_time);
@@ -1534,6 +1552,8 @@ es.onmessage=e=>{
     const sign=delta<0?'':'+';
     dEl.textContent=sign+delta.toFixed(3)+'s';
     dEl.className='delta-val '+(delta<-0.01?'ahead':delta>0.01?'behind':'even');
+    // flash delta when significantly behind pace
+    if(delta>1.5) flash('t-delta');
   } else {
     dEl.textContent='—'; dEl.className='delta-val even';
   }
