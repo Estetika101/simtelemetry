@@ -2769,7 +2769,7 @@ input[type=checkbox]{accent-color:var(--accent);width:12px;height:12px;flex-shri
 .lsb-d{font-size:.76rem;font-variant-numeric:tabular-nums;margin-left:auto}
 .lsb-slip{font-size:.64rem;color:var(--n-500)}
 .panel-wrap{margin-bottom:2px}
-.panel-lbl-row{display:flex;align-items:center;margin-bottom:1px;min-height:14px}
+.panel-lbl-row{display:flex;align-items:center;margin-bottom:1px;min-height:14px; font-size:1rem}
 .p-lbl{font-size:.56rem;color:var(--n-500);text-transform:uppercase;letter-spacing:1.5px}
 .panel-svg-wrap{position:relative;overflow:hidden;border:1px solid var(--border-sub);border-radius:2px;background:var(--bg-raised);cursor:crosshair}
 .panel-svg-wrap svg{display:block;width:100%}
@@ -3325,12 +3325,13 @@ function setupInteraction(){
       const sel=$('drag-sel');
       sel.style.left=Math.min(_dragX0,x1)+'px';
       sel.style.width=Math.abs(x1-_dragX0)+'px';
-      sel.style.display='';
+      sel.style.display='block';
     }
   };
   area.onmouseleave=hideX;
   area.onmousedown=e=>{
     if(!e.target.closest('.panel-svg-wrap'))return;
+    e.preventDefault();
     _dragging=true;_dragX0=e.clientX-area.getBoundingClientRect().left;
   };
   area.onmouseup=e=>{
