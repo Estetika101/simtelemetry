@@ -1138,7 +1138,7 @@ _PAGE_STYLE = "<style>" + _CSS_TOKENS + """
   /* browser */
   .path-row{display:flex;gap:var(--sp-2)}
   .path-row input{flex:1;min-width:0}
-  .btn-browse{background:var(--surface);border:1px solid var(--surface-bd);color:#777;font-family:inherit;font-size:.75rem;padding:var(--sp-2) var(--sp-3);border-radius:4px;cursor:pointer;white-space:nowrap}
+  .btn-browse{background:var(--surface);border:1px solid var(--surface-bd);color:lightgrey;font-family:inherit;font-size:.75rem;padding:var(--sp-2) var(--sp-3);border-radius:4px;cursor:pointer;white-space:nowrap}
   .btn-browse:hover{border-color:#4a4a6a;color:var(--text)}
   .path-status{font-size:.7rem;margin-top:5px;min-height:1.2em;transition:color .2s}
   .browse-panel{background:#0a0a0e;border:1px solid #1e1e2e;border-radius:4px;margin-top:var(--sp-2)}
@@ -1173,7 +1173,7 @@ _PAGE_STYLE = "<style>" + _CSS_TOKENS + """
   .btn-inject:hover{background:#16a34a}
   .btn-stream{background:var(--surface);border:1px solid var(--surface-bd);color:var(--n-100);font-family:inherit;font-size:.8rem;padding:9px var(--sp-5);border-radius:4px;cursor:pointer}
   .btn-stream.on{background:#ef444411;border-color:var(--danger-alpha);color:var(--danger)}
-  .hz-sel{background:var(--surface);border:1px solid var(--surface-bd);color:#777;font-family:inherit;font-size:.75rem;padding:var(--sp-2) 10px;border-radius:4px}
+  .hz-sel{background:var(--surface);border:1px solid var(--surface-bd);color:lightgrey;font-family:inherit;font-size:.75rem;padding:var(--sp-2) 10px;border-radius:4px}
   .sent-lbl{font-size:.75rem;color:var(--n-500);margin-left:var(--sp-1)}
   .sent-lbl span{color:var(--text-muted)}
   .admin-divider{border:none;border-top:1px solid #1a1a28;margin:var(--sp-5) 0}
