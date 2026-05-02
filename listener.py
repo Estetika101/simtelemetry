@@ -1139,85 +1139,73 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 /* ── layout ── */
 .main{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden}
 
-/* ── flash animation ── */
-@keyframes flash-red{0%{box-shadow:inset 0 0 0 2px #ef4444aa}60%{box-shadow:inset 0 0 0 2px #ef444466}100%{box-shadow:inset 0 0 0 2px transparent}}
+/* ── flash ── */
+@keyframes flash-red{0%{box-shadow:inset 0 0 0 2px #ef4444cc}60%{box-shadow:inset 0 0 0 2px #ef444455}100%{box-shadow:inset 0 0 0 2px transparent}}
 .flash{animation:flash-red .35s ease-out forwards}
 
-/* ── ROW 1: PEDALS (hero — moved up) ── */
-.row-pedals{flex:none;border-bottom:1px solid #111;padding:14px 22px;display:flex;flex-direction:column;gap:12px}
-.pedal-row{display:flex;align-items:center;gap:14px;border-radius:3px;padding:2px 4px;transition:background .1s}
-.pedal-lbl{font-size:1rem;color:#999;text-transform:uppercase;letter-spacing:2px;width:90px;flex:none}
-.pedal-track{flex:1;background:#0d0d0d;border-radius:2px;overflow:hidden;height:26px}
-.pedal-fill{height:100%;width:0%;border-radius:2px;transition:width .04s linear}
+/* ── MAIN PANELS: 4 equal columns ── */
+.panels{flex:1;display:flex;min-height:0;overflow:hidden}
+.panel-col{flex:1;display:flex;flex-direction:column;padding:12px 14px;border-right:1px solid #111;min-width:0;border-radius:0}
+.panel-col:last-child{border-right:none}
+.p-lbl{font-size:1rem;color:#888;text-transform:uppercase;letter-spacing:3px;margin-bottom:10px;flex:none}
+
+/* vertical bar (throttle / brake) */
+.vbar-wrap{flex:1;background:#0a0a0a;border-radius:3px;position:relative;overflow:hidden;margin-bottom:12px;min-height:0}
+.vbar-fill{position:absolute;bottom:0;left:0;right:0;height:0%;border-radius:3px;transition:height .04s linear}
 .thr-fill{background:#00ff41}
 .brk-fill{background:#ef4444}
-.pedal-pct{font-size:1.8rem;font-weight:900;width:68px;text-align:right;flex:none}
+.p-num{font-size:2.7rem;font-weight:900;text-align:center;flex:none;line-height:1}
 .thr-pct{color:#00ff41}
 .brk-pct{color:#ef4444}
 
-/* ── ROW 2: SLIP · TIMING ── */
-.row-mid{flex:none;display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid #111}
+/* slip column */
+.slip-bars{flex:1;display:flex;gap:12px;min-height:0}
+.slip-bar-col{flex:1;display:flex;flex-direction:column;min-width:0}
+.slip-bar-lbl{font-size:.88rem;color:#777;text-transform:uppercase;letter-spacing:1px;text-align:center;margin-bottom:6px;flex:none}
+.slip-num{font-size:2.1rem;font-weight:900;text-align:center;flex:none;line-height:1;transition:color .1s;margin-top:10px}
 
-/* slip panel */
-.slip-panel{padding:14px 22px;border-right:1px solid #111;border-radius:3px}
-.panel-lbl{font-size:1rem;color:#999;text-transform:uppercase;letter-spacing:3px;margin-bottom:10px}
-.slip-row{display:flex;align-items:center;gap:12px;margin-bottom:8px}
-.slip-row:last-child{margin-bottom:0}
-.slip-corner{font-size:1rem;color:#aaa;letter-spacing:1px;width:28px;flex:none;font-weight:bold}
-.slip-track{flex:1;background:#0d0d0d;border-radius:2px;overflow:hidden;height:16px}
-.slip-fill{height:100%;width:0%;border-radius:2px;transition:width .08s linear}
-.slip-val{font-size:1.4rem;font-weight:bold;width:56px;text-align:right;flex:none;transition:color .1s}
-.slip-warn{font-size:.85rem;width:16px;flex:none;text-align:center;opacity:0}
-
-/* timing panel */
-.timing-panel{padding:14px 22px}
-.timing-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px}
-.t-lbl{font-size:.9rem;color:#999;text-transform:uppercase;letter-spacing:2px;margin-bottom:3px}
-.t-val{font-size:1.5rem;font-weight:900;color:#e0e0e0;letter-spacing:.5px}
+/* timing column */
+.timing-vals{flex:1;display:flex;flex-direction:column;gap:6px;min-height:0;justify-content:space-around}
+.t-lbl{font-size:.82rem;color:#888;text-transform:uppercase;letter-spacing:2px;margin-bottom:1px}
+.t-val{font-size:1.6rem;font-weight:900;color:#e0e0e0;letter-spacing:.5px;line-height:1.1}
 .t-val.green{color:#22c55e}
-.delta-row{grid-column:1/-1;margin-top:4px;padding-top:8px;border-top:1px solid #111;display:flex;align-items:baseline;gap:10px}
-.delta-lbl{font-size:.9rem;color:#999;text-transform:uppercase;letter-spacing:2px}
-.delta-val{font-size:1.8rem;font-weight:900;letter-spacing:-1px;border-radius:3px;padding:0 4px}
+.t-delta-row{border-top:1px solid #111;padding-top:8px;margin-top:2px}
+.delta-val{font-size:2.1rem;font-weight:900;letter-spacing:-1px;border-radius:3px;padding:0 4px;line-height:1}
 .delta-val.ahead{color:#22c55e}
 .delta-val.behind{color:#ef4444}
-.delta-val.even{color:#888}
+.delta-val.even{color:#555}
 
-/* ── ROW 3: GEAR · SPEED · RPM BAR (demoted — visible in cockpit) ── */
-.row-hero{flex:0 0 auto;display:grid;grid-template-columns:1fr 1.2fr 2fr;min-height:0;border-bottom:1px solid #111}
-.hero-cell{display:flex;flex-direction:column;justify-content:center;align-items:center;padding:10px 10px}
-.hero-cell.rpmcell{align-items:stretch;padding:14px 22px;border-left:1px solid #111}
-.hero-lbl{font-size:1rem;color:#555;text-transform:uppercase;letter-spacing:3px;margin-bottom:4px}
-.gear-val{font-size:clamp(4rem,14vw,9rem);font-weight:900;line-height:1;color:#888;letter-spacing:-4px}
-.gear-val.N{color:#333}
-.gear-val.R{color:#ef444488}
-.speed-val{font-size:clamp(3rem,8vw,5.5rem);font-weight:900;line-height:1;color:#888;letter-spacing:-2px}
-.speed-unit{font-size:1rem;color:#555;text-transform:uppercase;letter-spacing:3px;margin-top:4px}
-.rpm-lbl-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
-.rpm-lbl{font-size:1rem;color:#555;text-transform:uppercase;letter-spacing:3px}
-.rpm-pct{font-size:1.1rem;font-weight:bold;color:#666}
-.rpm-track{flex:1;background:#0d0d0d;border-radius:3px;overflow:hidden;height:clamp(22px,4vh,36px);position:relative}
+/* ── BOTTOM STRIP: Gear · Speed · RPM · Tyres ── */
+.bot-panels{flex:none;height:68px;display:flex;align-items:stretch;border-bottom:1px solid #0a0a0a}
+.bp{display:flex;flex-direction:column;justify-content:center;align-items:center;padding:0 18px;border-right:1px solid #0e0e0e;flex:none}
+.bp-lbl{font-size:.68rem;color:#333;text-transform:uppercase;letter-spacing:2px;margin-bottom:2px}
+.gear-val{font-size:2.2rem;font-weight:900;color:#555;line-height:1}
+.gear-val.N{color:#2a2a2a}.gear-val.R{color:#7a222288}
+.speed-val{font-size:1.8rem;font-weight:900;color:#555;line-height:1}
+.speed-unit{font-size:.65rem;color:#333;text-transform:uppercase;letter-spacing:2px;margin-top:1px}
+.rpm-bp{flex:1;align-items:stretch;padding:8px 18px;justify-content:center}
+.rpm-lbl-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px}
+.rpm-lbl{font-size:.68rem;color:#333;text-transform:uppercase;letter-spacing:2px}
+.rpm-pct{font-size:.85rem;font-weight:bold;color:#444}
+.rpm-track{background:#080808;border-radius:2px;overflow:hidden;height:12px;position:relative}
 .rpm-fill{height:100%;width:0%;transition:width .04s linear}
-.rpm-fill.lo  {background:#1a3a22}
-.rpm-fill.mid {background:#1a4a28}
-.rpm-fill.hi  {background:#3a3010}
+.rpm-fill.lo  {background:#0f2a18}
+.rpm-fill.mid {background:#143a1e}
+.rpm-fill.hi  {background:#2a2208}
 .rpm-fill.shift{background:#ef4444;animation:sf .1s infinite}
 @keyframes sf{0%,100%{box-shadow:inset 0 0 20px #ef000066}50%{box-shadow:inset 0 0 40px #ff440099}}
-.rpm-gear-mark{position:absolute;top:0;bottom:0;width:2px;background:#1a1a1a}
-.rpm-num{font-size:.95rem;color:#555;margin-top:5px;text-align:right;letter-spacing:1px}
-.hero-cell.speedcell{border-left:1px solid #111}
-
-/* ── ROW 4: TYRES ── */
-.row-tyres{flex:none;padding:10px 22px;display:flex;align-items:center;gap:20px;border-bottom:1px solid #0a0a0a}
-.tyres-lbl{font-size:1rem;color:#555;text-transform:uppercase;letter-spacing:3px;flex:none}
-.tyre-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 16px}
-.tyre-cell{display:flex;align-items:center;gap:6px}
-.tyre-corner{font-size:.95rem;color:#666;letter-spacing:1px;width:26px;font-weight:bold}
-.tyre-temp{font-size:1.1rem;font-weight:bold;min-width:52px;transition:color .2s}
-.tyre-temp.cold{color:#5b9bd5}
+.rpm-gear-mark{position:absolute;top:0;bottom:0;width:2px;background:#111}
+.rpm-num{font-size:.7rem;color:#333;margin-top:3px;letter-spacing:1px}
+.tyres-bp{flex:none;align-items:flex-start;justify-content:center;padding:8px 16px}
+.tyre-grid{display:grid;grid-template-columns:1fr 1fr;gap:1px 10px}
+.tyre-cell{display:flex;align-items:center;gap:4px}
+.tyre-corner{font-size:.65rem;color:#444;width:20px;font-weight:bold;letter-spacing:.5px}
+.tyre-temp{font-size:.85rem;font-weight:bold;transition:color .2s}
+.tyre-temp.cold{color:#4a7aaa}
 .tyre-temp.ok  {color:#22c55e}
 .tyre-temp.hot {color:#f59e0b}
 .tyre-temp.over{color:#ef4444}
-.tyre-temp.na  {color:#222}
+.tyre-temp.na  {color:#1e1e1e}
 
 /* ── bottom strip ── */
 .bot{flex:none;height:28px;display:flex;align-items:center;padding:0 14px;gap:10px}
@@ -1288,76 +1276,85 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
 
 <div class="main">
 
-  <!-- ROW 1: PEDALS -->
-  <div class="row-pedals">
-    <div class="pedal-row" id="thr-row">
-      <span class="pedal-lbl">Throttle</span>
-      <div class="pedal-track"><div class="pedal-fill thr-fill" id="thr-b"></div></div>
-      <span class="pedal-pct thr-pct" id="thr-v">0%</span>
-    </div>
-    <div class="pedal-row" id="brk-row">
-      <span class="pedal-lbl">Brake</span>
-      <div class="pedal-track"><div class="pedal-fill brk-fill" id="brk-b"></div></div>
-      <span class="pedal-pct brk-pct" id="brk-v">0%</span>
-    </div>
-  </div>
+  <!-- MAIN PANELS: Throttle | Brake | Rear Slip | Lap Timing -->
+  <div class="panels">
 
-  <!-- ROW 2: SLIP · TIMING -->
-  <div class="row-mid">
-    <div class="slip-panel" id="slip-panel">
-      <div class="panel-lbl">Rear Slip</div>
-      <div class="slip-row">
-        <span class="slip-corner">RL</span>
-        <div class="slip-track"><div class="slip-fill" id="srl-b"></div></div>
-        <span class="slip-val" id="srl-v">—</span>
-        <span class="slip-warn" id="srl-w">⚠</span>
+    <div class="panel-col" id="thr-row">
+      <div class="p-lbl">Throttle</div>
+      <div class="vbar-wrap">
+        <div class="vbar-fill thr-fill" id="thr-b"></div>
       </div>
-      <div class="slip-row">
-        <span class="slip-corner">RR</span>
-        <div class="slip-track"><div class="slip-fill" id="srr-b"></div></div>
-        <span class="slip-val" id="srr-v">—</span>
-        <span class="slip-warn" id="srr-w">⚠</span>
+      <div class="p-num thr-pct" id="thr-v">0%</div>
+    </div>
+
+    <div class="panel-col" id="brk-row">
+      <div class="p-lbl">Brake</div>
+      <div class="vbar-wrap">
+        <div class="vbar-fill brk-fill" id="brk-b"></div>
+      </div>
+      <div class="p-num brk-pct" id="brk-v">0%</div>
+    </div>
+
+    <div class="panel-col" id="slip-panel">
+      <div class="p-lbl">Rear Slip</div>
+      <div class="slip-bars">
+        <div class="slip-bar-col">
+          <div class="slip-bar-lbl">RL</div>
+          <div class="vbar-wrap">
+            <div class="vbar-fill" id="srl-b"></div>
+          </div>
+          <div class="slip-num" id="srl-v">—</div>
+        </div>
+        <div class="slip-bar-col">
+          <div class="slip-bar-lbl">RR</div>
+          <div class="vbar-wrap">
+            <div class="vbar-fill" id="srr-b"></div>
+          </div>
+          <div class="slip-num" id="srr-v">—</div>
+        </div>
       </div>
     </div>
-    <div class="timing-panel">
-      <div class="panel-lbl">Lap Timing</div>
-      <div class="timing-grid">
-        <div class="t-cell">
+
+    <div class="panel-col">
+      <div class="p-lbl">Lap Timing</div>
+      <div class="timing-vals">
+        <div>
           <div class="t-lbl">Current</div>
           <div class="t-val" id="t-cur">—</div>
         </div>
-        <div class="t-cell">
+        <div>
           <div class="t-lbl">Best</div>
           <div class="t-val green" id="t-best">—</div>
         </div>
-        <div class="t-cell">
+        <div>
           <div class="t-lbl">Last</div>
           <div class="t-val" id="t-last">—</div>
         </div>
-        <div class="t-cell">
+        <div>
           <div class="t-lbl">Lap</div>
           <div class="t-val" id="t-lap">—</div>
         </div>
-        <div class="delta-row">
-          <span class="delta-lbl">Delta</span>
-          <span class="delta-val even" id="t-delta">—</span>
+        <div class="t-delta-row">
+          <div class="t-lbl">Delta</div>
+          <div class="delta-val even" id="t-delta">—</div>
         </div>
       </div>
     </div>
+
   </div>
 
-  <!-- ROW 3: GEAR · SPEED · RPM BAR (secondary — visible in cockpit) -->
-  <div class="row-hero">
-    <div class="hero-cell">
-      <div class="hero-lbl">Gear</div>
+  <!-- BOTTOM STRIP: Gear · Speed · RPM · Tyres -->
+  <div class="bot-panels">
+    <div class="bp">
+      <div class="bp-lbl">Gear</div>
       <div class="gear-val" id="gear">—</div>
     </div>
-    <div class="hero-cell speedcell">
-      <div class="hero-lbl">Speed</div>
+    <div class="bp">
+      <div class="bp-lbl">Speed</div>
       <div class="speed-val" id="spd">—</div>
       <div class="speed-unit">mph</div>
     </div>
-    <div class="hero-cell rpmcell">
+    <div class="bp rpm-bp">
       <div class="rpm-lbl-row">
         <span class="rpm-lbl">RPM</span>
         <span class="rpm-pct" id="rpm-pct">—</span>
@@ -1368,18 +1365,16 @@ body{background:#000;color:#fff;font-family:'Courier New',monospace;display:flex
       </div>
       <div class="rpm-num" id="rpm-num">—</div>
     </div>
-  </div>
-
-  <!-- ROW 4: TYRES -->
-  <div class="row-tyres">
-    <span class="tyres-lbl">Tyres</span>
-    <div class="tyre-grid">
-      <div class="tyre-cell"><span class="tyre-corner">FL</span><span class="tyre-temp na" id="ty-fl">—</span></div>
-      <div class="tyre-cell"><span class="tyre-corner">FR</span><span class="tyre-temp na" id="ty-fr">—</span></div>
-      <div class="tyre-cell"><span class="tyre-corner">RL</span><span class="tyre-temp na" id="ty-rl">—</span></div>
-      <div class="tyre-cell"><span class="tyre-corner">RR</span><span class="tyre-temp na" id="ty-rr">—</span></div>
+    <div class="bp tyres-bp">
+      <div class="bp-lbl">Tyres</div>
+      <div class="tyre-grid">
+        <div class="tyre-cell"><span class="tyre-corner">FL</span><span class="tyre-temp na" id="ty-fl">—</span></div>
+        <div class="tyre-cell"><span class="tyre-corner">FR</span><span class="tyre-temp na" id="ty-fr">—</span></div>
+        <div class="tyre-cell"><span class="tyre-corner">RL</span><span class="tyre-temp na" id="ty-rl">—</span></div>
+        <div class="tyre-cell"><span class="tyre-corner">RR</span><span class="tyre-temp na" id="ty-rr">—</span></div>
+      </div>
+      <span style="font-size:.6rem;color:#2a2a2a;margin-top:2px" id="ty-cmp"></span>
     </div>
-    <span style="font-size:.65rem;color:#333;margin-left:8px" id="ty-cmp"></span>
   </div>
 
 </div><!-- /main -->
@@ -1476,13 +1471,10 @@ function setSlip(pfx,val){
   const v=val??0;
   const pct=Math.min(100,v/0.5*100);
   const col=slipColor(v);
-  $(pfx+'-b').style.width=pct+'%';
+  $(pfx+'-b').style.height=pct+'%';
   $(pfx+'-b').style.background=col;
   $(pfx+'-v').textContent=val!=null?v.toFixed(3):'—';
   $(pfx+'-v').style.color=col;
-  const warn=$(pfx+'-w');
-  warn.style.opacity=v>=0.1?'1':'0';
-  warn.style.color=v>=0.3?'#ef4444':'#f59e0b';
 }
 
 es.onmessage=e=>{
@@ -1524,9 +1516,9 @@ es.onmessage=e=>{
 
   // pedals
   const thr=d.throttle_pct||0,brk=d.brake_pct||0;
-  $('thr-b').style.width=thr+'%';
+  $('thr-b').style.height=thr+'%';
   $('thr-v').textContent=Math.round(thr)+'%';
-  $('brk-b').style.width=brk+'%';
+  $('brk-b').style.height=brk+'%';
   $('brk-v').textContent=Math.round(brk)+'%';
   // flash throttle row when braking and on throttle simultaneously (conflicting inputs)
   if(brk>15&&thr>30) flash('thr-row');
