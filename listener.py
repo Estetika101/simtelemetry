@@ -76,7 +76,7 @@ SESSION_TIMEOUT_S = config["session_timeout_s"]
 IDLE_TIMEOUT_S    = config["idle_timeout_s"]
 STATUS_PORT       = config["status_port"]
 LOG_LEVEL         = logging.INFO
-_listener_started_at: float | None = None
+_listener_started_at = None  # float, set in main()
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
