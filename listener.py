@@ -426,19 +426,25 @@ _f1_session_meta: dict = {}
 
 def parse_f1(data: bytes) -> Optional[dict]:
     """Dispatch F1 packets by ID; return unified dict for telemetry packets."""
-    if len(data) < F1_HEADER_SIZE:
+    if len(data) < 24:  # minimum valid header (F1 2023)
         return None
     try:
-        packet_id  = struct.unpack_from("<B", data, 6)[0]
+        # Detect game year from packetFormat field (uint16 @ 0): 2023 or 2024
+        packet_format = struct.unpack_from("<H", data, 0)[0]
+        is_2024 = (packet_format >= 2024)
+        # F1 2023: 24-byte header, playerCarIndex @ 23
+        # F1 2024: 29-byte header, playerCarIndex @ 27
+        hdr      = 29 if is_2024 else 24
+        pidx_off = 27 if is_2024 else 23
+
+        packet_id   = struct.unpack_from("<B", data, 6)[0]
         session_uid = struct.unpack_from("<Q", data, 7)[0]
 
         if packet_id == 1:
-            # Session packet — extract track name and session type
-            # weather(B), trackTemp(b), airTemp(b), totalLaps(B), trackLength(H),
-            # sessionType(B), trackId(b), formula(B) ...
-            base = F1_HEADER_SIZE
+            # Session — extract track and session type
+            # layout: weather(B) trackTemp(b) airTemp(b) totalLaps(B) trackLength(H) sessionType(B) trackId(b)
+            base = hdr
             if len(data) >= base + 8:
-                # Session data layout: weather(B) trackTemp(b) airTemp(b) totalLaps(B) trackLength(H) sessionType(B) trackId(b)
                 session_type = struct.unpack_from("<B", data, base + 6)[0]
                 track_id     = struct.unpack_from("<b", data, base + 7)[0]
                 session_types = {
@@ -451,26 +457,57 @@ def parse_f1(data: bytes) -> Optional[dict]:
                 }
                 _f1_session_meta[session_uid] = {
                     "track":        F1_TRACKS.get(track_id, f"track_{track_id}"),
-                    "session_type": session_types.get(session_type, "Unknown"),
+                    "session_type": session_types.get(session_type, "unknown"),
                 }
-            return None  # Session packets don't produce a telemetry sample
+            return None
+
+        if packet_id == 2:
+            # LapData — lap number, times, position
+            # F1 2024 per-car: 50 bytes  |  F1 2023 per-car: 43 bytes
+            if is_2024:
+                car_size     = 50
+                off_last_lap = 0   # uint32 lastLapTimeInMS
+                off_cur_lap  = 4   # uint32 currentLapTimeInMS
+                off_pos      = 30  # uint8 carPosition
+                off_lap_num  = 31  # uint8 currentLapNum
+                off_grid_pos = 41  # uint8 gridPosition
+            else:
+                car_size     = 43
+                off_last_lap = 0
+                off_cur_lap  = 4
+                off_pos      = 24
+                off_lap_num  = 25
+                off_grid_pos = 34
+            player_idx = struct.unpack_from("<B", data, pidx_off)[0]
+            base = hdr + player_idx * car_size
+            if len(data) < base + car_size:
+                return None
+            last_lap_ms = struct.unpack_from("<I", data, base + off_last_lap)[0]
+            cur_lap_ms  = struct.unpack_from("<I", data, base + off_cur_lap)[0]
+            car_pos     = struct.unpack_from("<B", data, base + off_pos)[0]
+            cur_lap_num = struct.unpack_from("<B", data, base + off_lap_num)[0]
+            grid_pos    = struct.unpack_from("<B", data, base + off_grid_pos)[0]
+            return {
+                "_packet_type":     "lap_data",
+                "_session_uid":     session_uid,
+                "lap_number":       cur_lap_num,
+                "current_lap_time": round(cur_lap_ms / 1000, 3) if cur_lap_ms < 600_000 else None,
+                "last_lap_time":    round(last_lap_ms / 1000, 3) if 0 < last_lap_ms < 600_000 else None,
+                "race_position":    car_pos,
+                "grid_position":    grid_pos,
+            }
 
         if packet_id == 0:
-            # Motion packet — position and velocity for player car
-            player_idx = struct.unpack_from("<B", data, F1_HEADER_SIZE - 2)[0]
-            # Each car motion: worldPosX(f), worldPosY(f), worldPosZ(f),
-            #   worldVelX(f), worldVelY(f), worldVelZ(f),
-            #   worldForwardDirX(H), worldForwardDirY(H), worldForwardDirZ(H),
-            #   worldRightDirX(H), worldRightDirY(H), worldRightDirZ(H),
-            #   gForceLateral(f), gForceLongitudinal(f), gForceVertical(f),
-            #   yaw(f), pitch(f), roll(f)
+            # Motion — g-forces and velocity for player car
+            # per-car: worldPos(3f) worldVel(3f) worldForwardDir(3H) worldRightDir(3H)
+            #          gForceLateral(f) gForceLongitudinal(f) gForceVertical(f) yaw(f) pitch(f) roll(f)
+            player_idx = struct.unpack_from("<B", data, pidx_off)[0]
             car_size = 60
-            base = F1_HEADER_SIZE + player_idx * car_size
+            base = hdr + player_idx * car_size
             if len(data) < base + car_size:
                 return None
             pos_x, pos_y, pos_z = struct.unpack_from("<fff", data, base)
             vel_x, vel_y, vel_z = struct.unpack_from("<fff", data, base + 12)
-            # Skip direction vectors (6 shorts = 12 bytes)
             g_lat  = struct.unpack_from("<f", data, base + 36)[0]
             g_lon  = struct.unpack_from("<f", data, base + 40)[0]
             g_vert = struct.unpack_from("<f", data, base + 44)[0]
@@ -489,17 +526,16 @@ def parse_f1(data: bytes) -> Optional[dict]:
             }
 
         if packet_id == 6:
-            # Car telemetry packet
-            player_idx = struct.unpack_from("<B", data, F1_HEADER_SIZE - 2)[0]
-            # Each car: speed(H), throttle(f), steer(f), brake(f), clutch(B),
-            #   gear(b), engineRPM(H), drs(B), revLightsPercent(B),
-            #   revLightsBitValue(H), brakesTemp(4H), tyresSurfaceTemp(4B),
-            #   tyresInnerTemp(4B), engineTemp(H), tyresPressure(4f), surfaceType(4B)
+            # CarTelemetry — speed, inputs, tyres, engine
+            # per-car (60 bytes): speed(H) throttle(f) steer(f) brake(f) clutch(B)
+            #   gear(b) engineRPM(H) drs(B) revLightsPercent(B) revLightsBitValue(H)
+            #   brakesTemp(4H) tyresSurfaceTemp(4B) tyresInnerTemp(4B)
+            #   engineTemp(H) tyresPressure(4f) surfaceType(4B)
+            player_idx = struct.unpack_from("<B", data, pidx_off)[0]
             car_size = 60
-            base = F1_HEADER_SIZE + player_idx * car_size
+            base = hdr + player_idx * car_size
             if len(data) < base + car_size:
                 return None
-
             speed    = struct.unpack_from("<H", data, base)[0]
             throttle = struct.unpack_from("<f", data, base + 2)[0]
             steer    = struct.unpack_from("<f", data, base + 6)[0]
@@ -508,75 +544,69 @@ def parse_f1(data: bytes) -> Optional[dict]:
             gear     = struct.unpack_from("<b", data, base + 15)[0]
             rpm      = struct.unpack_from("<H", data, base + 16)[0]
             drs      = struct.unpack_from("<B", data, base + 18)[0]
-
-            # After drs(B@18): revLightsPercent(B@19), revLightsBitValue(H@20) = 3 bytes → brake temps at base+22
+            # drs@18 + revLightsPercent(B)@19 + revLightsBitValue(H)@20 → brake temps at +22
             bt_rl, bt_rr, bt_fl, bt_fr = struct.unpack_from("<HHHH", data, base + 22)
-            # Tyre surface temps: 4 × uint8 at base+30
             ts_rl, ts_rr, ts_fl, ts_fr = struct.unpack_from("<BBBB", data, base + 30)
-            # Tyre inner temps: 4 × uint8 at base+34
             ti_rl, ti_rr, ti_fl, ti_fr = struct.unpack_from("<BBBB", data, base + 34)
             engine_temp = struct.unpack_from("<H", data, base + 38)[0]
-            # Tyre pressure: 4 × float at base+40
             tp_rl, tp_rr, tp_fl, tp_fr = struct.unpack_from("<ffff", data, base + 40)
-
             meta = _f1_session_meta.get(session_uid, {})
             return {
-                "_packet_type":   "telemetry",
-                "_session_uid":   session_uid,
-                "track":          meta.get("track", "unknown"),
-                "session_type":   meta.get("session_type", "unknown"),
-                "speed_mph":      round(speed * 0.621371, 1),
-                "throttle_pct":   round(throttle * 100, 1),
-                "brake_pct":      round(brake * 100, 1),
-                "clutch_pct":     round(clutch / 255 * 100, 1),
-                "steer":          round(steer, 3),
-                "gear":           gear,
-                "rpm":            rpm,
-                "drs":            bool(drs),
-                "brake_temp_fl":  bt_fl,
-                "brake_temp_fr":  bt_fr,
-                "brake_temp_rl":  bt_rl,
-                "brake_temp_rr":  bt_rr,
+                "_packet_type":         "telemetry",
+                "_session_uid":         session_uid,
+                "track":                meta.get("track", "unknown"),
+                "session_type":         meta.get("session_type", "unknown"),
+                "speed_mph":            round(speed * 0.621371, 1),
+                "throttle_pct":         round(throttle * 100, 1),
+                "brake_pct":            round(brake * 100, 1),
+                "clutch_pct":           round(clutch / 255 * 100, 1),
+                "steer":                round(steer, 3),
+                "gear":                 gear,
+                "rpm":                  rpm,
+                "drs":                  bool(drs),
+                "brake_temp_fl":        bt_fl,
+                "brake_temp_fr":        bt_fr,
+                "brake_temp_rl":        bt_rl,
+                "brake_temp_rr":        bt_rr,
                 "tyre_surface_temp_fl": ts_fl,
                 "tyre_surface_temp_fr": ts_fr,
                 "tyre_surface_temp_rl": ts_rl,
                 "tyre_surface_temp_rr": ts_rr,
-                "tyre_inner_temp_fl": ti_fl,
-                "tyre_inner_temp_fr": ti_fr,
-                "tyre_inner_temp_rl": ti_rl,
-                "tyre_inner_temp_rr": ti_rr,
-                "tyre_pressure_fl": round(tp_fl, 2),
-                "tyre_pressure_fr": round(tp_fr, 2),
-                "tyre_pressure_rl": round(tp_rl, 2),
-                "tyre_pressure_rr": round(tp_rr, 2),
-                "engine_temp":    engine_temp,
+                "tyre_inner_temp_fl":   ti_fl,
+                "tyre_inner_temp_fr":   ti_fr,
+                "tyre_inner_temp_rl":   ti_rl,
+                "tyre_inner_temp_rr":   ti_rr,
+                "tyre_pressure_fl":     round(tp_fl, 2),
+                "tyre_pressure_fr":     round(tp_fr, 2),
+                "tyre_pressure_rl":     round(tp_rl, 2),
+                "tyre_pressure_rr":     round(tp_rr, 2),
+                "engine_temp":          engine_temp,
             }
 
         if packet_id == 7:
-            # Car status — fuel, ERS, tyre compound
-            player_idx = struct.unpack_from("<B", data, F1_HEADER_SIZE - 2)[0]
-            # Each car status: tractionControl(B), antiLockBrakes(B), fuelMix(B),
-            #   frontBrakeBias(B), pitLimiterStatus(B), fuelInTank(f),
-            #   fuelCapacity(f), fuelRemainingLaps(f), maxRPM(H), idleRPM(H),
-            #   maxGears(B), drsAllowed(B), drsActivationDistance(H),
-            #   actualTyreCompound(B), visualTyreCompound(B), tyresAgeLaps(B), ...
+            # CarStatus — fuel, tyre compound
+            # per-car (47 bytes): tractionControl(B) antiLockBrakes(B) fuelMix(B)
+            #   frontBrakeBias(B) pitLimiterStatus(B) fuelInTank(f) fuelCapacity(f)
+            #   fuelRemainingLaps(f) maxRPM(H) idleRPM(H) maxGears(B) drsAllowed(B)
+            #   drsActivationDistance(H) actualTyreCompound(B) visualTyreCompound(B) tyresAgeLaps(B)
+            player_idx = struct.unpack_from("<B", data, pidx_off)[0]
             car_size = 47
-            base = F1_HEADER_SIZE + player_idx * car_size
+            base = hdr + player_idx * car_size
             if len(data) < base + car_size:
                 return None
-            fuel_in_tank       = struct.unpack_from("<f", data, base + 5)[0]
+            fuel_in_tank        = struct.unpack_from("<f", data, base + 5)[0]
             fuel_remaining_laps = struct.unpack_from("<f", data, base + 13)[0]
-            tyre_compound      = struct.unpack_from("<B", data, base + 23)[0]
-            tyre_age_laps      = struct.unpack_from("<B", data, base + 25)[0]
+            tyre_compound       = struct.unpack_from("<B", data, base + 23)[0]
+            tyre_age_laps       = struct.unpack_from("<B", data, base + 25)[0]
             compounds = {16: "C5", 17: "C4", 18: "C3", 19: "C2", 20: "C1",
                          21: "C0", 7: "Inter", 8: "Wet", 9: "Wet"}
             return {
-                "_packet_type":       "car_status",
-                "_session_uid":       session_uid,
-                "fuel_in_tank":       round(fuel_in_tank, 2),
+                "_packet_type":        "car_status",
+                "_session_uid":        session_uid,
+                "fuel_in_tank":        round(fuel_in_tank, 2),
                 "fuel_remaining_laps": round(fuel_remaining_laps, 1),
-                "tyre_compound":      compounds.get(tyre_compound, f"compound_{tyre_compound}"),
-                "tyre_age_laps":      tyre_age_laps,
+                "tyre_compound":       compounds.get(tyre_compound, f"compound_{tyre_compound}"),
+                "tyre_age_laps":       tyre_age_laps,
             }
 
         return None
@@ -666,9 +696,11 @@ class Session:
 
         # Motion cache (F1 motion packets arrive separately from telemetry)
         self._motion_cache: dict = {}
+        # Lap data cache (F1 LapData packets arrive separately from telemetry)
+        self._lap_cache: dict = {}
 
         self.race_type = None  # set post-session via /sessions/update
-        self._race_positions: list[int] = []  # Forza: sampled positions for session type inference
+        self._race_positions: list[int] = []  # sampled positions for session type inference
 
         self.last_activity = time.time()  # updated only when driver input is detected
 
@@ -712,10 +744,14 @@ class Session:
                 self._race_positions.append(rp)
             return
 
-        # Merge cached motion into telemetry
-        if packet_type == "telemetry" and self._motion_cache:
-            parsed = {**parsed, **self._motion_cache}
-            self._motion_cache = {}
+        # Merge cached motion and lap data into telemetry
+        if packet_type == "telemetry":
+            if self._motion_cache:
+                parsed = {**parsed, **self._motion_cache}
+                self._motion_cache = {}
+            if self._lap_cache:
+                parsed = {**self._lap_cache, **parsed}  # telemetry fields take precedence
+                self._lap_cache = {}
 
         # Update track/car metadata
         if parsed.get("track", "unknown") != "unknown":
@@ -725,11 +761,11 @@ class Session:
         if "car_ordinal" in parsed and self.car == "unknown":
             self.car = str(parsed["car_ordinal"])
 
-        # Forza: sample race_position for session type inference at close()
-        if self.game == "forza_motorsport":
-            rp = parsed.get("race_position")
-            if rp is not None and rp > 0:
-                self._race_positions.append(rp)
+        # Sample race_position for session type inference at close()
+        # F1: comes from merged LapData; Forza: from packet directly
+        rp = parsed.get("race_position")
+        if rp is not None and rp > 0:
+            self._race_positions.append(rp)
 
         # Forza: lap transitions via lap_number field
         lap_num = parsed.get("lap_number", 0)
@@ -903,8 +939,8 @@ state = {
 active_sessions: dict[str, Session] = {}
 
 def update_state(game: str, session: Session, parsed: dict):
-    if parsed.get("_packet_type") in ("motion", None) and "_packet_type" in parsed:
-        return  # don't overwrite telemetry state with partial motion data
+    if parsed.get("_packet_type") in ("motion", "lap_data", None) and "_packet_type" in parsed:
+        return  # don't overwrite telemetry state with motion or lap metadata
     state["status"]       = "receiving" if session._is_driving(parsed) else "idle"
     state["game"]         = game
     state["session_id"]   = session.session_id
@@ -934,7 +970,9 @@ def update_state(game: str, session: Session, parsed: dict):
     if parsed.get("last_lap_time"):
         state["last_lap_time_s"] = parsed["last_lap_time"]
     for corner in ("fl", "fr", "rl", "rr"):
-        v = parsed.get(f"tire_temp_{corner}")
+        v = parsed.get(f"tire_temp_{corner}")          # Forza key
+        if v is None:
+            v = parsed.get(f"tyre_surface_temp_{corner}")  # F1 key
         if v is not None:
             state[f"tyre_{corner}"] = round(v, 1)
     state["last_packet_at"]      = datetime.now().isoformat()
@@ -986,9 +1024,17 @@ class TelemetryProtocol(asyncio.DatagramProtocol):
         session = active_sessions[self.game]
 
         if not driving:
-            session.last_packet = time.time()  # keep alive timer running
+            session.last_packet = time.time()
+            # F1 LapData arrives as non-driving; cache for merging into next telemetry packet
+            if parsed.get("_packet_type") == "lap_data":
+                session._lap_cache.update(
+                    {k: v for k, v in parsed.items() if not k.startswith("_") and v is not None}
+                )
+                rp = parsed.get("race_position")
+                if rp is not None and rp > 0:
+                    session._race_positions.append(rp)
             update_state(self.game, session, parsed)
-            return  # don't record idle packets
+            return  # don't record idle packets as lap samples
 
         session.ingest(data, parsed)
         update_state(self.game, session, parsed)
