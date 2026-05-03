@@ -61,7 +61,7 @@ jobs:
       - name: Checkout marketing site
         uses: actions/checkout@v4
         with:
-          repository: Estetika101/pacefinder.app
+          repository: Estetika101/pacefinder
           token: ${{ secrets.MARKETING_SITE_TOKEN }}
           path: marketing-site
 
