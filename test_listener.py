@@ -498,26 +498,27 @@ async def _run_watchdog_once():
             L.state["game"]   = None
 
 
-# ── network smoke test ────────────────────────────────────────────────────────
+# ── live UDP tests (requires running listener) ────────────────────────────────
 
 PORTS = {"forza_motorsport": 5300, "acc": 9996, "f1": 20777}
 
-SMOKE_PACKETS = {
-    "forza_motorsport": [build_forza_packet()],
-    "acc":              [build_acc_packet()],
-    "f1":               [build_f1_session_packet(), build_f1_telemetry_packet()],
-}
+LIVE_PASS = 0
+LIVE_FAIL = 0
 
 
-def send_packets(host: str):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    for game, packets in SMOKE_PACKETS.items():
-        port = PORTS[game]
-        for pkt in packets:
-            sock.sendto(pkt, (host, port))
-        total = sum(len(p) for p in packets)
-        print(f"  ✓ {game:<22} → {host}:{port}  ({total} bytes)")
-    sock.close()
+def lcheck(label: str, condition: bool, detail: str = ""):
+    global LIVE_PASS, LIVE_FAIL
+    if condition:
+        LIVE_PASS += 1
+        print(f"  ✓  {label}")
+    else:
+        LIVE_FAIL += 1
+        print(f"  ✗  {label}{('  ← ' + detail) if detail else ''}")
+
+
+def _send(sock: socket.socket, host: str, port: int, packets):
+    for pkt in packets:
+        sock.sendto(pkt, (host, port))
 
 
 def poll_status(host: str, status_port: int, timeout: float = 3.0) -> dict:
@@ -528,55 +529,182 @@ def poll_status(host: str, status_port: int, timeout: float = 3.0) -> dict:
             with urllib.request.urlopen(url, timeout=2) as resp:
                 return json.loads(resp.read())
         except Exception:
-            time.sleep(0.2)
+            time.sleep(0.1)
     return {}
 
 
-def run_smoke_test(host: str, status_port: int):
-    print(f"\n[smoke test → {host}:{status_port}]")
-    before = poll_status(host, status_port)
-    if not before:
-        print("  ⚠  Could not reach /status — is the listener running?")
+def poll_until(host: str, port: int, condition, timeout: float = 3.0) -> Optional[dict]:
+    """Poll /status until condition(state) is True or timeout."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        s = poll_status(host, port)
+        if s and condition(s):
+            return s
+        time.sleep(0.15)
+    return poll_status(host, port)
+
+
+def live_test_forza(host: str, status_port: int, sock: socket.socket):
+    print("\n[live: forza]")
+    port = PORTS["forza_motorsport"]
+
+    # Send 5 driving packets at 100 mph, lap 1
+    for _ in range(5):
+        _send(sock, host, port, [build_forza_packet(speed_mph=100.0, throttle_pct=80.0, lap=1)])
+        time.sleep(0.05)
+
+    s = poll_until(host, status_port, lambda st: st.get("game") == "forza_motorsport")
+    lcheck("forza: game in state",     s.get("game") == "forza_motorsport",
+           str(s.get("game")))
+    lcheck("forza: speed_mph ≈ 100",   s.get("speed_mph", 0) > 90,
+           str(s.get("speed_mph")))
+    lcheck("forza: throttle_pct > 0",  s.get("throttle_pct", 0) > 0)
+    lcheck("forza: tyre_fl set",       s.get("tyre_fl") is not None, str(s.get("tyre_fl")))
+    lcheck("forza: slip_rl ≥ 0",       s.get("slip_rl") is not None)
+
+    # Lap transition: send lap=2 with a last_lap time
+    for _ in range(3):
+        _send(sock, host, port, [build_forza_packet(speed_mph=100.0, lap=2, last_lap=91.5)])
+        time.sleep(0.05)
+    s = poll_until(host, status_port, lambda st: st.get("lap", 0) >= 2, timeout=2.0)
+    lcheck("forza: lap number advances",   s.get("lap", 0) >= 2, str(s.get("lap")))
+    lcheck("forza: best_lap_time_s set",   s.get("best_lap_time_s") is not None,
+           str(s.get("best_lap_time_s")))
+
+
+def live_test_acc(host: str, status_port: int, sock: socket.socket):
+    print("\n[live: acc]")
+    port = PORTS["acc"]
+
+    for _ in range(5):
+        _send(sock, host, port, [build_acc_packet(speed_mph=120.0, throttle_pct=75.0,
+                                                  slip_rl=0.07, slip_rr=0.08)])
+        time.sleep(0.05)
+
+    s = poll_until(host, status_port, lambda st: st.get("game") == "acc")
+    lcheck("acc: game in state",     s.get("game") == "acc", str(s.get("game")))
+    lcheck("acc: speed_mph ≈ 120",   s.get("speed_mph", 0) > 110, str(s.get("speed_mph")))
+    lcheck("acc: slip_rl > 0",       s.get("slip_rl", 0) > 0, str(s.get("slip_rl")))
+    lcheck("acc: slip_rr > 0",       s.get("slip_rr", 0) > 0, str(s.get("slip_rr")))
+
+
+def _game_port_bound(host: str, status_port: int, game: str) -> bool:
+    """Return True if the listener successfully bound the UDP port for this game."""
+    s = poll_status(host, status_port, timeout=1.0)
+    if not s:
+        return False
+    return game in s.get("bound_ports", {})
+
+
+def live_test_f1(host: str, status_port: int, sock: socket.socket):
+    print("\n[live: f1]")
+    if not _game_port_bound(host, status_port, "f1"):
+        print("  SKIP — F1 port 20777 not bound (another app may be using it)")
         return
+    port = PORTS["f1"]
+    uid = 0xCAFEBABE1234
 
-    print(f"  status={before.get('status')}  count={before.get('packet_count', 0)}")
-    print()
-    print("  Sending packets:")
-    send_packets(host)
-    time.sleep(0.5)
+    # Prime session meta (track + session_type)
+    _send(sock, host, port, [build_f1_session_packet(track_id=10, session_type=10, uid=uid)])
+    time.sleep(0.05)
 
-    after = poll_status(host, status_port)
-    if not after:
-        print("  ✗  Lost /status after sending")
-        return
+    # Send MotionEx (slip), LapData (lap timing), CarTelemetry (speed/inputs) — repeated
+    for i in range(5):
+        _send(sock, host, port, [
+            build_f1_motionex_packet(slip_rl=0.09, slip_rr=0.11, uid=uid),
+            build_f1_lapdata_packet(lap_num=2, cur_lap_ms=30000 + i*1000,
+                                    last_lap_ms=88500, uid=uid),
+            build_f1_telemetry_packet(speed_mph=200.0, throttle=0.85, uid=uid),
+        ])
+        time.sleep(0.05)
 
-    before_count = before.get("packet_count", 0)
-    after_count  = after.get("packet_count", 0)
-    delta = after_count - before_count
+    s = poll_until(host, status_port, lambda st: st.get("game") == "f1", timeout=3.0)
+    lcheck("f1: game in state",        s.get("game") == "f1", str(s.get("game")))
+    lcheck("f1: speed_mph ≈ 200",      s.get("speed_mph", 0) > 180, str(s.get("speed_mph")))
+    lcheck("f1: throttle_pct > 0",     s.get("throttle_pct", 0) > 0)
+    lcheck("f1: tyre_fl set",          s.get("tyre_fl") is not None, str(s.get("tyre_fl")))
+    lcheck("f1: slip_rl > 0",          s.get("slip_rl", 0) > 0, str(s.get("slip_rl")))
+    lcheck("f1: slip_rr > 0",          s.get("slip_rr", 0) > 0, str(s.get("slip_rr")))
+    lcheck("f1: current_lap_time set", s.get("current_lap_time") is not None,
+           str(s.get("current_lap_time")))
+    lcheck("f1: lap ≥ 2",              s.get("lap", 0) >= 2, str(s.get("lap")))
 
-    print()
-    print(f"  status={after.get('status')}  game={after.get('game')}")
-    print(f"  packet_count={after_count}  (+{delta})")
-    print(f"  speed_mph={after.get('speed_mph')}  gear={after.get('gear')}")
 
-    if delta > 0:
-        print("\n  ✅  Listener receiving and parsing packets.")
+def live_test_game_switch(host: str, status_port: int, sock: socket.socket):
+    """Switch Forza → F1 → ACC and verify state follows each switch."""
+    print("\n[live: game switching]")
+    uid = 0xDEADBEEF1234
+    f1_available = _game_port_bound(host, status_port, "f1")
+
+    # Forza
+    for _ in range(3):
+        _send(sock, host, PORTS["forza_motorsport"],
+              [build_forza_packet(speed_mph=90)])
+        time.sleep(0.05)
+    s = poll_until(host, status_port, lambda st: st.get("game") == "forza_motorsport")
+    lcheck("switch: forza becomes active", s.get("game") == "forza_motorsport",
+           str(s.get("game")))
+
+    # Switch to F1 (only if port bound)
+    if f1_available:
+        _send(sock, host, PORTS["f1"], [
+            build_f1_motionex_packet(slip_rl=0.05, uid=uid),
+            build_f1_telemetry_packet(speed_mph=210.0, uid=uid),
+        ])
+        s = poll_until(host, status_port, lambda st: st.get("game") == "f1", timeout=3.0)
+        lcheck("switch: f1 takes over", s.get("game") == "f1", str(s.get("game")))
+        lcheck("switch: f1 speed correct", s.get("speed_mph", 0) > 190, str(s.get("speed_mph")))
     else:
-        print("\n  ❌  No new packets registered — check network/firewall.")
+        print("  SKIP switch→f1 — F1 port 20777 not bound")
+
+    # Switch to ACC
+    for _ in range(3):
+        _send(sock, host, PORTS["acc"], [build_acc_packet(speed_mph=130.0)])
+        time.sleep(0.05)
+    s = poll_until(host, status_port, lambda st: st.get("game") == "acc", timeout=3.0)
+    lcheck("switch: acc takes over", s.get("game") == "acc", str(s.get("game")))
+
+
+def run_live_tests(host: str, status_port: int):
+    print(f"\n{'═'*44}")
+    print(f"  Live UDP tests → {host}:{status_port}")
+    print(f"{'═'*44}")
+
+    s = poll_status(host, status_port, timeout=2.0)
+    if not s:
+        print("  ⚠  Cannot reach /status — start the listener first:")
+        print("     python3 listener.py")
+        return
+
+    print(f"  Listener online (status={s.get('status')})")
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        live_test_forza(host, status_port, sock)
+        live_test_acc(host, status_port, sock)
+        live_test_f1(host, status_port, sock)
+        live_test_game_switch(host, status_port, sock)
+    finally:
+        sock.close()
+
+    print(f"\n{'─'*44}")
+    print(f"  Live: {LIVE_PASS} passed  {LIVE_FAIL} failed")
+    print(f"{'─'*44}")
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def main():
     ap = argparse.ArgumentParser(description="SimTelemetry automated tests")
-    ap.add_argument("--smoke",       action="store_true", help="Also run network smoke test")
+    ap.add_argument("--live",        action="store_true",
+                    help="Also run live UDP tests (requires running listener)")
     ap.add_argument("--host",        default="127.0.0.1")
     ap.add_argument("--status-port", default=8000, type=int)
     args = ap.parse_args()
 
     print("SimTelemetry test suite\n")
 
-    # Pipeline tests (no server needed)
+    # Pipeline tests — no server needed, call datagram_received directly
     test_parsers()
     test_session_creation()
     test_acc_pipeline()
@@ -587,14 +715,14 @@ def main():
     test_game_switching()
     test_tyre_temps_per_game()
 
-    print(f"\n{'─'*40}")
-    print(f"  {PASS} passed  {FAIL} failed")
-    print(f"{'─'*40}")
+    print(f"\n{'═'*44}")
+    print(f"  Pipeline: {PASS} passed  {FAIL} failed")
+    print(f"{'═'*44}")
 
-    if args.smoke:
-        run_smoke_test(args.host, args.status_port)
+    if args.live:
+        run_live_tests(args.host, args.status_port)
 
-    sys.exit(1 if FAIL else 0)
+    sys.exit(1 if (FAIL or LIVE_FAIL) else 0)
 
 
 if __name__ == "__main__":

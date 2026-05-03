@@ -962,6 +962,7 @@ state = {
     "udp_rejected": {"forza_motorsport": 0, "acc": 0, "f1": 0},
     "last_rejected_size": {"forza_motorsport": None, "acc": None, "f1": None},
     "udp_last_at": {"forza_motorsport": None, "acc": None, "f1": None},
+    "bound_ports": {},
 }
 
 active_sessions: dict[str, Session] = {}
@@ -1193,15 +1194,33 @@ def _build_inject_packets(game: str, p: dict) -> list:
         speed_kmh = int(speed_mph * 1.60934)
         uid = 0xDEADCAFE
         def hdr(pid):
-            return struct.pack("<HBBBBBQfIIBB", 2024, 24, 1, 0, pid, 0, uid, 0.0, 0, 0, 0, 255)
+            # packetId at offset 6 (where parse_f1 reads it), packetVersion=1 at offset 5
+            return struct.pack("<HBBBBBQfIIBB", 2024, 24, 1, 0, 1, pid, uid, 0.0, 0, 0, 0, 255)
+        # Session packet — primes track/session_type meta
         sess = hdr(1) + struct.pack("<BbbBHBb", 0, 25, 20, 50, 5793, 10, 11)
-        car  = struct.pack(
+        # CarTelemetry packet — speed, inputs, tyre temps
+        car = struct.pack(
             "<HfffBbHBBH4H4B4BH4f4B",
             speed_kmh, throttle/100, 0.0, brake/100, 0, gear, int(rpm), 0, 0, 0,
             0, 0, 0, 0, 85, 85, 85, 85, 90, 90, 90, 90, 105,
             23.5, 23.5, 22.8, 22.8, 0, 0, 0, 0,
         ).ljust(60, b'\x00')
-        return [sess, hdr(6) + car]
+        # LapData packet — lap number and timing (offsets: lastLap@0 curLap@4 lapNum@31)
+        lap_car = struct.pack("<II", 0, 15000)           # lastLap=0, curLap=15s
+        lap_car += struct.pack("<HB", 0, 0)              # sector1
+        lap_car += struct.pack("<HB", 0, 0)              # sector2
+        lap_car += struct.pack("<II", 0, 0)              # deltas
+        lap_car += struct.pack("<ff", 500.0, 5000.0)     # distances
+        lap_car += struct.pack("<BB", 1, lap)            # carPosition=1, currentLapNum
+        lap_car = lap_car.ljust(50, b'\x00')
+        lapdata = hdr(2) + lap_car
+        # MotionEx packet — wheelSlip at hdr+64 (fl/fr/rl/rr)
+        slip_scale = max(0.0, (speed_mph - 20) / 150)   # gentle slip proportional to speed
+        pre_slip = b'\x00' * 64
+        slip_data = struct.pack("<ffff", slip_scale * 0.5, slip_scale * 0.5,
+                                slip_scale, slip_scale * 1.1)
+        motionex = hdr(13) + pre_slip + slip_data
+        return [sess, motionex, lapdata, hdr(6) + car]
 
     return []
 
@@ -6392,9 +6411,10 @@ async def main():
                 lambda g=game, p=parsers[game]: TelemetryProtocol(g, p),
                 local_addr=("0.0.0.0", port),
             )
+            state["bound_ports"][game] = port
             log.info(f"Listening for {game} on UDP port {port}")
         except OSError as e:
-            log.error(f"Failed to bind {game} on port {port}: {e}")
+            log.error(f"Failed to bind {game} on port {port}: {e} — F1/ACC/Forza port conflict?")
 
     asyncio.create_task(session_watchdog())
 
