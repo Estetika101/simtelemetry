@@ -309,7 +309,7 @@ _ACC_SESSION_TYPES = {
 
 def parse_acc(data: bytes) -> Optional[dict]:
     """Parse ACC physics (packetId=0) or graphics (packetId=1) packet."""
-    if len(data) < 100:
+    if len(data) < 4:
         return None
     try:
         packet_id = struct.unpack_from("<i", data, 0)[0]
@@ -1026,12 +1026,13 @@ class TelemetryProtocol(asyncio.DatagramProtocol):
             state["udp_rejected"][self.game] = count
             state["last_rejected_size"][self.game] = len(data)
             ts = datetime.now().strftime("%H:%M:%S")
-            _debug_push(f"{ts} [REJECTED] {self.game} {len(data)}B from {addr[0]}")
+            hex16 = data[:16].hex(" ") if len(data) >= 16 else data.hex(" ")
+            _debug_push(f"{ts} [REJECTED] {self.game} {len(data)}B from {addr[0]}  hex={hex16}")
             # Log on first rejection and every 100th after
             if count == 1 or count % 100 == 0:
                 log.warning(
                     f"[{self.game}] packet #{count} from {addr[0]} rejected — "
-                    f"size={len(data)} bytes. "
+                    f"size={len(data)} bytes  first16={hex16}. "
                     f"Forza expects {FM_PACKET_SIZE} (FM2023) or {FM_PACKET_SIZE_FH} (FH4/FH5), "
                     f"ACC expects >={100}, F1 expects >={F1_HEADER_SIZE}. "
                     f"Check Data Out settings."
@@ -1042,7 +1043,8 @@ class TelemetryProtocol(asyncio.DatagramProtocol):
         speed = parsed.get("speed_mph", 0)
         gear  = parsed.get("gear", parsed.get("current_engine_rpm", "?"))
         rpm   = parsed.get("rpm", parsed.get("current_engine_rpm", 0))
-        _debug_push(f"{ts} [UDP OK]  {self.game} {len(data)}B  {speed:.0f}mph  rpm={rpm:.0f}  gear={gear}")
+        ptype = parsed.get("_packet_type", "telemetry")
+        _debug_push(f"{ts} [UDP OK]  {self.game} {len(data)}B  {speed:.0f}mph  rpm={rpm:.0f}  gear={gear}  type={ptype}")
 
         driving = _is_driving(parsed)
 
@@ -1057,8 +1059,13 @@ class TelemetryProtocol(asyncio.DatagramProtocol):
         if not driving:
             session.last_packet = time.time()
             ptype = parsed.get("_packet_type")
+            # F1 Motion / MotionEx — always cache so next driving telemetry sees slip data
+            if ptype == "motion":
+                session._motion_cache.update(
+                    {k: v for k, v in parsed.items() if not k.startswith("_") and v is not None}
+                )
             # F1 LapData — cache for merging into next telemetry packet
-            if ptype == "lap_data":
+            elif ptype == "lap_data":
                 session._lap_cache.update(
                     {k: v for k, v in parsed.items() if not k.startswith("_") and v is not None}
                 )
@@ -1076,10 +1083,15 @@ class TelemetryProtocol(asyncio.DatagramProtocol):
             update_state(self.game, session, parsed)
             return  # don't record idle packets as lap samples
 
-        # Pre-merge F1 lap cache so update_state sees current_lap_time / last_lap_time
-        if session._lap_cache and parsed.get("_packet_type") == "telemetry":
-            parsed = {**session._lap_cache, **parsed}
-            session._lap_cache = {}
+        # Pre-merge motion and lap caches so both ingest() and update_state() see the data.
+        # ingest() does the same merges internally but they're local rebinds, not visible here.
+        if parsed.get("_packet_type") == "telemetry":
+            if session._motion_cache:
+                parsed = {**parsed, **session._motion_cache}
+                session._motion_cache = {}
+            if session._lap_cache:
+                parsed = {**session._lap_cache, **parsed}  # telemetry fields take precedence
+                session._lap_cache = {}
 
         session.ingest(data, parsed)
         update_state(self.game, session, parsed)
@@ -1094,7 +1106,8 @@ class TelemetryProtocol(asyncio.DatagramProtocol):
 
 async def _clear_race_ended():
     await asyncio.sleep(30)
-    if state["status"] == "race_ended":
+    # Only clear if still showing race_ended AND no sessions went live in the meantime
+    if state["status"] == "race_ended" and not active_sessions:
         state["status"] = "idle"
 
 
@@ -1114,6 +1127,7 @@ async def session_watchdog():
             if not active_sessions:
                 state["status"] = "race_ended"
                 state["game"]   = None
+                state["session_id"] = None
                 log.info("All sessions closed. Listening...")
                 asyncio.create_task(_clear_race_ended())
 
