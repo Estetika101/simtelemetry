@@ -76,6 +76,7 @@ SESSION_TIMEOUT_S = config["session_timeout_s"]
 IDLE_TIMEOUT_S    = config["idle_timeout_s"]
 STATUS_PORT       = config["status_port"]
 LOG_LEVEL         = logging.INFO
+_listener_started_at: float | None = None
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
@@ -133,6 +134,29 @@ def disk_info() -> dict:
         }
     except OSError:
         return {"total_gb": None, "used_gb": None, "free_gb": None}
+
+def _get_local_ips() -> list:
+    """Return non-loopback IPv4 addresses on all local interfaces."""
+    ips: list = []
+    seen: set = set()
+    # Primary route — UDP trick sends no actual packets
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        if ip and not ip.startswith("127."):
+            seen.add(ip); ips.append(ip)
+    except Exception:
+        pass
+    # All addresses advertised for this hostname
+    try:
+        for ip in socket.gethostbyname_ex(socket.gethostname())[2]:
+            if ip and not ip.startswith("127.") and ip not in seen:
+                seen.add(ip); ips.append(ip)
+    except Exception:
+        pass
+    return ips
 
 # ─── Forza Motorsport Parser ──────────────────────────────────────────────────
 # FM2023 Data Out "Car Dash" packet: 311 bytes
@@ -414,8 +438,9 @@ def parse_f1(data: bytes) -> Optional[dict]:
             # sessionType(B), trackId(b), formula(B) ...
             base = F1_HEADER_SIZE
             if len(data) >= base + 8:
-                track_id     = struct.unpack_from("<b", data, base + 5)[0]
-                session_type = struct.unpack_from("<B", data, base + 4)[0]
+                # Session data layout: weather(B) trackTemp(b) airTemp(b) totalLaps(B) trackLength(H) sessionType(B) trackId(b)
+                session_type = struct.unpack_from("<B", data, base + 6)[0]
+                track_id     = struct.unpack_from("<b", data, base + 7)[0]
                 session_types = {
                     0: "unknown",
                     1: "practice", 2: "practice", 3: "practice", 4: "practice",
@@ -484,15 +509,15 @@ def parse_f1(data: bytes) -> Optional[dict]:
             rpm      = struct.unpack_from("<H", data, base + 16)[0]
             drs      = struct.unpack_from("<B", data, base + 18)[0]
 
-            # Brake temps: 4 × uint16 at base+21
-            bt_rl, bt_rr, bt_fl, bt_fr = struct.unpack_from("<HHHH", data, base + 21)
-            # Tyre surface temps: 4 × uint8 at base+29
-            ts_rl, ts_rr, ts_fl, ts_fr = struct.unpack_from("<BBBB", data, base + 29)
-            # Tyre inner temps: 4 × uint8 at base+33
-            ti_rl, ti_rr, ti_fl, ti_fr = struct.unpack_from("<BBBB", data, base + 33)
-            engine_temp = struct.unpack_from("<H", data, base + 37)[0]
-            # Tyre pressure: 4 × float at base+39
-            tp_rl, tp_rr, tp_fl, tp_fr = struct.unpack_from("<ffff", data, base + 39)
+            # After drs(B@18): revLightsPercent(B@19), revLightsBitValue(H@20) = 3 bytes → brake temps at base+22
+            bt_rl, bt_rr, bt_fl, bt_fr = struct.unpack_from("<HHHH", data, base + 22)
+            # Tyre surface temps: 4 × uint8 at base+30
+            ts_rl, ts_rr, ts_fl, ts_fr = struct.unpack_from("<BBBB", data, base + 30)
+            # Tyre inner temps: 4 × uint8 at base+34
+            ti_rl, ti_rr, ti_fl, ti_fr = struct.unpack_from("<BBBB", data, base + 34)
+            engine_temp = struct.unpack_from("<H", data, base + 38)[0]
+            # Tyre pressure: 4 × float at base+40
+            tp_rl, tp_rr, tp_fl, tp_fr = struct.unpack_from("<ffff", data, base + 40)
 
             meta = _f1_session_meta.get(session_uid, {})
             return {
@@ -872,6 +897,7 @@ state = {
     "udp_received": {"forza_motorsport": 0, "acc": 0, "f1": 0},
     "udp_rejected": {"forza_motorsport": 0, "acc": 0, "f1": 0},
     "last_rejected_size": {"forza_motorsport": None, "acc": None, "f1": None},
+    "udp_last_at": {"forza_motorsport": None, "acc": None, "f1": None},
 }
 
 active_sessions: dict[str, Session] = {}
@@ -923,6 +949,7 @@ class TelemetryProtocol(asyncio.DatagramProtocol):
 
     def datagram_received(self, data: bytes, addr):
         state["udp_received"][self.game] = state["udp_received"].get(self.game, 0) + 1
+        state["udp_last_at"][self.game] = datetime.now().isoformat(timespec="seconds")
 
         parsed = self.parser(data)
         if not parsed:
@@ -1865,6 +1892,91 @@ SETUP_HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pacefinder · Setup</title>
 """ + _PAGE_STYLE + r"""
+<style>
+.ip-card {
+  background: #0d1f12;
+  border: 1px solid #1a3a20;
+  border-radius: 8px;
+  padding: 20px 24px;
+  margin-bottom: 24px;
+}
+.ip-card-title {
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: #3a7d44;
+  margin-bottom: 14px;
+}
+.ip-list { display: flex; flex-direction: column; gap: 8px; }
+.ip-row {
+  display: flex; align-items: center; gap: 10px;
+  background: #111a13; border: 1px solid #1e3322;
+  border-radius: 6px; padding: 10px 14px;
+}
+.ip-addr {
+  font-size: 1.1rem; font-weight: 600; color: #4ade80;
+  letter-spacing: .03em; flex: 1;
+}
+.copy-btn {
+  background: #1a3a20; border: 1px solid #2a5030; color: #4ade80;
+  font-size: 0.7rem; padding: 4px 10px; border-radius: 4px;
+  cursor: pointer; white-space: nowrap; font-family: inherit;
+  transition: background .15s;
+}
+.copy-btn:hover { background: #244d28; }
+.copy-btn.copied { background: #14532d; color: #86efac; }
+.game-strings { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
+.game-string-row {
+  display: flex; align-items: center; gap: 8px;
+  background: #0a1a0d; border: 1px solid #182a1a;
+  border-radius: 5px; padding: 7px 12px;
+}
+.game-label { font-size: 0.7rem; color: #888; width: 90px; flex-shrink: 0; }
+.game-value { font-size: 0.8rem; color: #ccc; font-family: monospace; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ip-loading { color: #444; font-size: 0.85rem; padding: 8px 0; }
+.ip-uptime { font-size: 0.7rem; color: #444; margin-top: 10px; }
+
+.udp-panel {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+  margin-bottom: 8px;
+}
+.udp-card {
+  background: #111118; border: 1px solid #22222f;
+  border-radius: 6px; padding: 12px 14px;
+}
+.udp-game { font-size: 0.65rem; text-transform: uppercase; letter-spacing: .06em; color: #555; margin-bottom: 6px; }
+.udp-status { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; }
+.udp-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #2a2a3a; flex-shrink: 0;
+  transition: background .3s;
+}
+.udp-dot.active { background: #4ade80; box-shadow: 0 0 6px #4ade8066; }
+.udp-dot.recent { background: #f59e0b; }
+.udp-count { font-size: 0.8rem; color: #888; }
+.udp-last { font-size: 0.65rem; color: #444; }
+
+.autostart-tabs { display: flex; gap: 0; margin-bottom: 0; border-bottom: 1px solid #1e1e2a; }
+.autostart-tab {
+  background: none; border: none; border-bottom: 2px solid transparent;
+  color: #555; font-size: 0.75rem; font-family: inherit;
+  padding: 8px 16px; cursor: pointer; margin-bottom: -1px;
+  transition: color .15s, border-color .15s;
+}
+.autostart-tab.active { color: #e0e0e0; border-bottom-color: var(--accent); }
+.autostart-panel { display: none; padding-top: 16px; }
+.autostart-panel.active { display: block; }
+.code-block {
+  background: #0a0a0f; border: 1px solid #1e1e2a;
+  border-radius: 5px; padding: 12px 14px;
+  font-family: monospace; font-size: 0.78rem;
+  color: #a0a0b0; white-space: pre-wrap; word-break: break-all;
+  margin: 10px 0;
+}
+.step { margin: 10px 0; color: #aaa; font-size: 0.82rem; line-height: 1.5; }
+.step b { color: #e0e0e0; }
+</style>
 </head>
 <body>
 <div class="topbar">
@@ -1878,6 +1990,42 @@ SETUP_HTML = r"""<!DOCTYPE html>
 </div>
 <script>if(location.search.includes('debug=true'))document.getElementById('nav-admin').style.display='';</script>
 
+<!-- ── Point your game here ──────────────────────────────────────── -->
+<div class="section">
+  <div class="section-title">Point your game here</div>
+  <div class="ip-card">
+    <div class="ip-card-title">This machine's local IP address</div>
+    <div id="ip-list" class="ip-list">
+      <div class="ip-loading">Detecting…</div>
+    </div>
+    <div class="game-strings" id="game-strings" style="display:none"></div>
+    <div class="ip-uptime" id="ip-uptime"></div>
+  </div>
+</div>
+
+<!-- ── UDP Status ─────────────────────────────────────────────────── -->
+<div class="section">
+  <div class="section-title">UDP Status</div>
+  <div class="udp-panel" id="udp-panel">
+    <div class="udp-card" id="udp-forza">
+      <div class="udp-game">Forza</div>
+      <div class="udp-status"><div class="udp-dot" id="dot-forza"></div><span class="udp-count" id="cnt-forza">0 packets</span></div>
+      <div class="udp-last" id="last-forza">—</div>
+    </div>
+    <div class="udp-card" id="udp-acc">
+      <div class="udp-game">ACC</div>
+      <div class="udp-status"><div class="udp-dot" id="dot-acc"></div><span class="udp-count" id="cnt-acc">0 packets</span></div>
+      <div class="udp-last" id="last-acc">—</div>
+    </div>
+    <div class="udp-card" id="udp-f1">
+      <div class="udp-game">F1</div>
+      <div class="udp-status"><div class="udp-dot" id="dot-f1"></div><span class="udp-count" id="cnt-f1">0 packets</span></div>
+      <div class="udp-last" id="last-f1">—</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Storage ────────────────────────────────────────────────────── -->
 <div class="section">
   <div class="section-title">Storage</div>
   <div class="field">
@@ -1900,6 +2048,7 @@ SETUP_HTML = r"""<!DOCTYPE html>
   <div id="disk-info" class="disk-info"></div>
 </div>
 
+<!-- ── Session ────────────────────────────────────────────────────── -->
 <div class="section">
   <div class="section-title">Session</div>
   <div class="field">
@@ -1908,6 +2057,7 @@ SETUP_HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
+<!-- ── UDP Ports ──────────────────────────────────────────────────── -->
 <div class="section">
   <div class="section-title">UDP Ports <span style="color:#444;font-size:0.6rem;margin-left:8px">restart required for port changes</span></div>
   <div class="ports-grid">
@@ -1926,6 +2076,46 @@ SETUP_HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
+<!-- ── Auto-start ─────────────────────────────────────────────────── -->
+<div class="section">
+  <div class="section-title">Auto-start</div>
+  <div class="autostart-tabs">
+    <button class="autostart-tab" id="tab-mac"     onclick="setOsTab('mac')">Mac</button>
+    <button class="autostart-tab" id="tab-linux"   onclick="setOsTab('linux')">Linux / Pi</button>
+    <button class="autostart-tab" id="tab-windows" onclick="setOsTab('windows')">Windows</button>
+  </div>
+
+  <div class="autostart-panel" id="panel-mac">
+    <div class="step">Run <b>install-mac.sh</b> once. It copies a launchd plist and loads it — Pacefinder will start on login and restart if it crashes.</div>
+    <div class="code-block">curl -fsSL https://pacefinder.app/install-mac.sh | bash</div>
+    <div class="step">Or download <b>install-mac.sh</b> from the GitHub release, edit the path at the top, then run it.</div>
+    <div class="step">Check status: <span style="font-family:monospace;color:#888">launchctl list | grep pacefinder</span></div>
+    <div class="step">View logs: <span style="font-family:monospace;color:#888">tail -f ~/Library/Logs/pacefinder.log</span></div>
+  </div>
+
+  <div class="autostart-panel" id="panel-linux">
+    <div class="step">Copy the service file and enable it with systemd:</div>
+    <div class="code-block">sudo cp simtelemetry.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable simtelemetry
+sudo systemctl start simtelemetry</div>
+    <div class="step">Check status: <span style="font-family:monospace;color:#888">sudo systemctl status simtelemetry</span></div>
+    <div class="step">View logs: <span style="font-family:monospace;color:#888">sudo journalctl -u simtelemetry -f</span></div>
+  </div>
+
+  <div class="autostart-panel" id="panel-windows">
+    <div class="step"><b>Option 1 — Task Scheduler (recommended)</b></div>
+    <div class="step">1. Open <b>Task Scheduler</b> → Create Basic Task<br>
+    2. Trigger: <b>When I log on</b><br>
+    3. Action: Start a program → <b>pythonw.exe</b> with argument <b>C:\path\to\listener.py</b><br>
+    4. Check "Run whether user is logged on or not" for always-on.</div>
+    <div class="step"><b>Option 2 — Startup folder</b></div>
+    <div class="step">Press <b>Win+R</b>, type <span style="font-family:monospace;color:#888">shell:startup</span>, and drop a shortcut to <b>pythonw listener.py</b> there.</div>
+    <div class="step"><b>Python install:</b> Download from <a href="https://python.org/downloads" target="_blank" style="color:#4ade80">python.org/downloads</a>. Check "Add Python to PATH" during install. Use <b>pythonw.exe</b> (not python.exe) to run without a console window.</div>
+  </div>
+</div>
+
+<!-- ── AI Analysis ────────────────────────────────────────────────── -->
 <div class="section">
   <div class="section-title">AI Analysis</div>
   <div class="field">
@@ -1947,6 +2137,104 @@ SETUP_HTML = r"""<!DOCTYPE html>
 <div class="toast" id="toast"></div>
 
 <script>
+// ── OS tab detection ─────────────────────────────────────────────────────────
+function detectOs() {
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes('win')) return 'windows';
+  if (ua.includes('mac')) return 'mac';
+  return 'linux';
+}
+
+function setOsTab(os) {
+  ['mac','linux','windows'].forEach(k => {
+    document.getElementById('tab-' + k).classList.toggle('active', k === os);
+    document.getElementById('panel-' + k).classList.toggle('active', k === os);
+  });
+}
+
+// ── IP card ──────────────────────────────────────────────────────────────────
+let _ipsData = null;
+
+async function loadIps() {
+  try {
+    const d = await fetch('/setup/ips').then(r => r.json());
+    _ipsData = d;
+    const listEl = document.getElementById('ip-list');
+    const gsEl   = document.getElementById('game-strings');
+    if (!d.ips || !d.ips.length) {
+      listEl.innerHTML = '<div class="ip-loading" style="color:#ef4444">Could not detect IP — check network connection.</div>';
+      return;
+    }
+    listEl.innerHTML = d.ips.map(ip => `
+      <div class="ip-row">
+        <span class="ip-addr">${ip}</span>
+        <button class="copy-btn" onclick="copyIp('${ip}',this)">Copy</button>
+      </div>`).join('');
+
+    const primary = d.ips[0];
+    const ports = d.ports || {};
+    const games = [
+      { label: 'Forza Motorsport', value: `IP: ${primary}  Port: ${ports.forza_motorsport || 5300}  Format: Car Dash` },
+      { label: 'ACC', value: `IP: ${primary}  Port: ${ports.acc || 9996}` },
+      { label: 'F1 2023/2024', value: `IP: ${primary}  Port: ${ports.f1 || 20777}` },
+    ];
+    gsEl.style.display = '';
+    gsEl.innerHTML = games.map(g => `
+      <div class="game-string-row">
+        <span class="game-label">${g.label}</span>
+        <span class="game-value">${g.value}</span>
+        <button class="copy-btn" onclick="copyText('${g.value}',this)">Copy</button>
+      </div>`).join('');
+
+    const h = Math.floor(d.uptime_s / 3600);
+    const m = Math.floor((d.uptime_s % 3600) / 60);
+    const s = d.uptime_s % 60;
+    const upStr = h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s}s` : `${s}s`;
+    document.getElementById('ip-uptime').textContent = `Listener uptime: ${upStr}`;
+  } catch(e) {
+    document.getElementById('ip-list').innerHTML = '<div class="ip-loading" style="color:#ef4444">Failed to load: ' + e.message + '</div>';
+  }
+}
+
+function copyIp(ip, btn) { copyText(ip, btn); }
+function copyText(text, btn) {
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!'; btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1500);
+  });
+}
+
+// ── UDP status polling ───────────────────────────────────────────────────────
+let _udpPollTimer = null;
+
+async function pollUdp() {
+  try {
+    const d = await fetch('/setup/ips').then(r => r.json());
+    const recv = d.udp_received || {};
+    const last = d.udp_last_at  || {};
+    const now  = new Date();
+    ['forza_motorsport','acc','f1'].forEach(game => {
+      const key = game === 'forza_motorsport' ? 'forza' : game;
+      const cnt  = recv[game] || 0;
+      const lastStr = last[game];
+      const dot  = document.getElementById('dot-' + key);
+      const cntEl = document.getElementById('cnt-' + key);
+      const lastEl = document.getElementById('last-' + key);
+      cntEl.textContent = cnt.toLocaleString() + ' packets';
+      if (lastStr) {
+        const ago = Math.round((now - new Date(lastStr)) / 1000);
+        lastEl.textContent = ago < 5 ? 'just now' : ago < 60 ? ago + 's ago' : Math.round(ago/60) + 'm ago';
+        dot.className = 'udp-dot ' + (ago < 5 ? 'active' : ago < 30 ? 'recent' : '');
+      } else {
+        lastEl.textContent = cnt > 0 ? 'receiving' : '—';
+        dot.className = 'udp-dot' + (cnt > 0 ? ' active' : '');
+      }
+    });
+  } catch(e) {}
+  _udpPollTimer = setTimeout(pollUdp, 2000);
+}
+
 // ── path validation ──────────────────────────────────────────────────────────
 let _vTimer = null;
 function scheduleValidate() { clearTimeout(_vTimer); _vTimer = setTimeout(validateNow, 350); }
@@ -2084,6 +2372,10 @@ async function save() {
   btn.disabled = false;
 }
 
+// ── init ─────────────────────────────────────────────────────────────────────
+setOsTab(detectOs());
+loadIps();
+pollUdp();
 load();
 </script>
 </body>
@@ -2309,104 +2601,126 @@ a{color:inherit;text-decoration:none}
 .tb-nav a{font-size:.8rem;color:#888;letter-spacing:1px;text-transform:uppercase}
 .tb-nav a:hover{color:#ccc}
 .tb-nav a.cur{color:var(--text);border-bottom:1px solid #aaaaaa}
-.page{padding:28px 28px 60px;max-width:1400px;margin:0 auto}
+.page{padding:24px 28px 60px;max-width:1400px;margin:0 auto}
+/* ── Game Tabs ──────────────────────────────────────────────── */
+.gtab-bar{display:flex;gap:0;margin-bottom:24px;border-bottom:1px solid #1a1a1a;overflow-x:auto;scrollbar-width:none}
+.gtab-bar::-webkit-scrollbar{display:none}
+.gtab{background:none;border:none;border-bottom:2px solid transparent;
+  color:#555;font-family:'Courier New',monospace;font-size:.85rem;letter-spacing:.05em;
+  padding:10px 20px 10px 0;cursor:pointer;white-space:nowrap;margin-bottom:-1px;
+  transition:color .15s,border-color .15s}
+.gtab:hover{color:#aaa}
+.gtab.active{color:#e8e8e8;border-bottom-color:#e8e8e8}
+.gtab .cnt{font-size:.72rem;color:#444;margin-left:6px;font-weight:400}
+.gtab.active .cnt{color:#888}
 /* ── KPI Cards ─────────────────────────────────────────────── */
 .kpi-row{display:flex;gap:12px;overflow-x:auto;padding-bottom:4px;margin-bottom:20px;scrollbar-width:none}
 .kpi-row::-webkit-scrollbar{display:none}
-.kpi{background:#060608;border:1px solid #1a1a1a;border-radius:8px;padding:18px 20px;min-width:160px;flex:1}
-.kpi-label{font-size:.6rem;color:#555;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px}
-.kpi-val{font-size:1.8rem;font-weight:900;line-height:1;margin-bottom:6px}
-.kpi-sub{font-size:.65rem;color:#444;letter-spacing:.5px}
-.kpi-val.blue{color:#4a7aaa}
+.kpi{background:#060608;border:1px solid #1e1e1e;border-radius:8px;padding:18px 20px;min-width:160px;flex:1}
+.kpi-label{font-size:.72rem;color:#888;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:10px}
+.kpi-val{font-size:2.2rem;font-weight:900;line-height:1;margin-bottom:8px}
+.kpi-sub{font-size:.72rem;color:#666;letter-spacing:.5px}
+.kpi-val.blue{color:#5a8acc}
 .kpi-val.green{color:#22c55e}
 .kpi-val.amber{color:#f59e0b}
 .kpi-val.red{color:#ef4444}
-.kpi-val.muted{color:#333}
+.kpi-val.muted{color:#666}
+/* ── Trend Spark ────────────────────────────────────────────── */
+.trend-card{background:#060608;border:1px solid #1e1e1e;border-radius:8px;padding:16px 20px;margin-bottom:20px;display:flex;align-items:center;gap:20px}
+.trend-meta{min-width:130px}
+.trend-label{font-size:.72rem;color:#888;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px}
+.trend-direction{font-size:1.1rem;font-weight:700}
+.trend-direction.up{color:#22c55e}
+.trend-direction.dn{color:#ef4444}
+.trend-direction.fl{color:#555}
+.trend-spark{flex:1;height:44px;min-width:0}
+.trend-spark svg{width:100%;height:100%}
 /* ── Form Card ──────────────────────────────────────────────── */
-.form-card{background:#060608;border:1px solid #1a1a1a;border-radius:8px;padding:20px 24px;margin-bottom:20px;display:flex;gap:32px;flex-wrap:wrap}
+.form-card{background:#060608;border:1px solid #1e1e1e;border-radius:8px;padding:20px 24px;margin-bottom:20px;display:flex;gap:32px;flex-wrap:wrap}
 .form-left{min-width:180px}
-.form-sect-label{font-size:.6rem;color:#555;letter-spacing:2px;text-transform:uppercase;margin-bottom:10px}
-.form-trend{font-size:1rem;font-weight:700;margin-bottom:6px}
+.form-sect-label{font-size:.72rem;color:#888;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:10px}
+.form-trend{font-size:1.05rem;font-weight:700;margin-bottom:6px}
 .form-trend.up{color:#22c55e}
 .form-trend.dn{color:#ef4444}
-.form-trend.fl{color:#666}
-.form-pct{font-size:.8rem;color:#888;margin-bottom:4px}
-.form-note{font-size:.65rem;color:#444}
+.form-trend.fl{color:#555}
+.form-pct{font-size:.82rem;color:#888;margin-bottom:4px}
+.form-note{font-size:.72rem;color:#555}
 .form-right{flex:1;min-width:260px}
 .form-filters{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap}
 .filter-group{display:flex;gap:4px}
-.ftog{font-size:.6rem;letter-spacing:1px;text-transform:uppercase;padding:4px 10px;border:1px solid #1e1e1e;border-radius:4px;cursor:pointer;color:#555;background:none;transition:all .15s}
+.ftog{font-size:.68rem;letter-spacing:1px;text-transform:uppercase;padding:5px 12px;border:1px solid #1e1e1e;border-radius:4px;cursor:pointer;color:#555;background:none;font-family:'Courier New',monospace;transition:all .15s}
 .ftog.on{border-color:#2a2a3a;color:#ccc;background:#0a0a14}
 .form-chart{display:flex;align-items:flex-end;gap:4px;height:72px}
-.bar{flex:1;min-width:12px;border-radius:3px 3px 0 0;transition:opacity .2s;cursor:default;position:relative}
+.bar{flex:1;min-width:10px;border-radius:3px 3px 0 0;transition:opacity .2s;cursor:default;position:relative}
 .bar:hover .bar-tip{display:block}
-.bar-tip{display:none;position:absolute;bottom:calc(100% + 4px);left:50%;transform:translateX(-50%);background:#111;border:1px solid #2a2a2a;border-radius:4px;padding:4px 8px;font-size:.6rem;color:#ccc;white-space:nowrap;z-index:5}
+.bar-tip{display:none;position:absolute;bottom:calc(100% + 4px);left:50%;transform:translateX(-50%);background:#111;border:1px solid #2a2a2a;border-radius:4px;padding:4px 8px;font-size:.68rem;color:#ccc;white-space:nowrap;z-index:5}
 /* ── Pills row ──────────────────────────────────────────────── */
 .pills-section{margin-bottom:20px}
-.pills-label{font-size:.6rem;color:#555;letter-spacing:2px;text-transform:uppercase;margin-bottom:10px}
+.pills-label{font-size:.72rem;color:#888;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:12px}
 .pills-row{display:flex;gap:10px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none}
 .pills-row::-webkit-scrollbar{display:none}
-.pill{background:#060608;border:1px solid #1a1a1a;border-radius:20px;padding:8px 16px;white-space:nowrap;cursor:pointer;transition:border-color .15s}
-.pill:hover{border-color:#2a2a3a}
-.pill-circuit{font-size:.6rem;color:#555;letter-spacing:1px;text-transform:uppercase;margin-bottom:3px}
-.pill-time{font-size:.9rem;font-weight:700;color:#f59e0b}
+.pill{background:#060608;border:1px solid #1e1e1e;border-radius:20px;padding:9px 18px;white-space:nowrap;cursor:pointer;transition:border-color .15s}
+.pill:hover{border-color:#333}
+.pill-circuit{font-size:.68rem;color:#888;letter-spacing:1px;text-transform:uppercase;margin-bottom:4px}
+.pill-time{font-size:.95rem;font-weight:700;color:#f59e0b}
 /* ── Circuit Table ──────────────────────────────────────────── */
 .table-section{margin-bottom:24px}
-.table-label{font-size:.6rem;color:#555;letter-spacing:2px;text-transform:uppercase;margin-bottom:12px}
+.table-label{font-size:.72rem;color:#888;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:14px}
 .ctable{width:100%;border-collapse:collapse}
-.ctable th{font-size:.6rem;color:#444;letter-spacing:1.5px;text-transform:uppercase;padding:8px 12px;text-align:left;border-bottom:1px solid #111}
-.ctable td{padding:11px 12px;font-size:.8rem;border-top:1px solid #0e0e0e}
+.ctable th{font-size:.7rem;color:#666;letter-spacing:1.5px;text-transform:uppercase;padding:10px 14px;text-align:left;border-bottom:1px solid #181818}
+.ctable td{padding:13px 14px;font-size:.9rem;border-top:1px solid #111}
 .ctable tr{cursor:pointer;transition:background .12s}
 .ctable tr:hover td{background:#06060c}
-.ctable .td-track{color:#ccc;font-weight:700}
-.ctable .td-num{color:#666;font-variant-numeric:tabular-nums}
-.ctable .td-blue{color:#4a7aaa;font-weight:700;font-variant-numeric:tabular-nums}
+.ctable .td-track{color:#e0e0e0;font-weight:700}
+.ctable .td-num{color:#888;font-variant-numeric:tabular-nums}
+.ctable .td-blue{color:#5a8acc;font-weight:700;font-variant-numeric:tabular-nums}
 .ctable .td-amber{color:#f59e0b;font-variant-numeric:tabular-nums}
 .ctable .td-trend-up{color:#22c55e}
 .ctable .td-trend-dn{color:#ef4444}
-.ctable .td-trend-fl{color:#333}
+.ctable .td-trend-fl{color:#444}
 /* ── Game Cards ─────────────────────────────────────────────── */
 .games-section{margin-bottom:24px}
 .games-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
-.gc{background:#060608;border:1px solid #1a1a1a;border-radius:8px;padding:20px 22px;cursor:pointer;transition:border-color .15s}
+.gc{background:#060608;border:1px solid #1e1e1e;border-radius:8px;padding:20px 22px;cursor:pointer;transition:border-color .15s}
 .gc:hover{border-color:#2a2a3a;background:#08080e}
-.gc.empty{opacity:.35;cursor:default}
-.gc.empty:hover{border-color:#1a1a1a;background:#060608}
-.gc-name{font-size:1.5rem;font-weight:900;color:#fff;letter-spacing:1px;margin-bottom:2px}
-.gc-desc{font-size:.65rem;color:#444;letter-spacing:.5px;margin-bottom:14px}
+.gc.empty{opacity:.3;cursor:default}
+.gc.empty:hover{border-color:#1e1e1e;background:#060608}
+.gc-name{font-size:1.55rem;font-weight:900;color:#fff;letter-spacing:1px;margin-bottom:2px}
+.gc-desc{font-size:.72rem;color:#555;letter-spacing:.5px;margin-bottom:14px}
 .gc-stats{display:flex;gap:20px;margin-bottom:14px}
-.gc-stat .v{font-size:1.1rem;font-weight:900;color:#e0e0e0}
-.gc-stat .l{font-size:.6rem;color:#444;text-transform:uppercase;letter-spacing:1px;margin-top:1px}
-.gc-best{font-size:.7rem;color:#f59e0b;margin-bottom:2px}
-.gc-best span{color:#444}
-.gc-last{font-size:.65rem;color:#333;border-top:1px solid #0e0e0e;padding-top:10px;margin-top:4px}
+.gc-stat .v{font-size:1.15rem;font-weight:900;color:#e8e8e8}
+.gc-stat .l{font-size:.68rem;color:#555;text-transform:uppercase;letter-spacing:1px;margin-top:2px}
+.gc-best{font-size:.78rem;color:#f59e0b;margin-bottom:4px}
+.gc-best span{color:#555}
+.gc-last{font-size:.72rem;color:#555;border-top:1px solid #111;padding-top:10px;margin-top:4px}
 .gc-spark{height:28px;margin-bottom:10px}
 /* ── Recent Feed ────────────────────────────────────────────── */
 .recent-section{margin-bottom:24px}
-.recent-label{font-size:.6rem;color:#555;letter-spacing:2px;text-transform:uppercase;margin-bottom:12px}
-.recent-row{display:flex;align-items:center;gap:14px;padding:10px 14px;border-top:1px solid #0e0e0e;cursor:pointer;transition:background .12s;border-radius:4px}
+.recent-label{font-size:.72rem;color:#888;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:14px}
+.recent-row{display:flex;align-items:center;gap:14px;padding:12px 14px;border-top:1px solid #111;cursor:pointer;transition:background .12s;border-radius:4px}
 .recent-row:hover{background:#06060c}
-.recent-badge{font-size:.55rem;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;padding:3px 8px;border-radius:3px;border:1px solid}
-.recent-badge.forza{color:#3b82f6;border-color:#3b82f620;background:#3b82f608}
-.recent-badge.acc{color:#a78bfa;border-color:#a78bfa20;background:#a78bfa08}
-.recent-badge.f1{color:#ef4444;border-color:#ef444420;background:#ef444408}
-.recent-circuit{flex:1;font-size:.82rem;color:#ccc;font-weight:700}
-.recent-date{font-size:.65rem;color:#333;white-space:nowrap}
-.recent-lap{font-size:.75rem;color:#f59e0b;font-variant-numeric:tabular-nums;white-space:nowrap}
-.recent-pos{font-size:.7rem;font-weight:700;padding:2px 8px;border-radius:3px;white-space:nowrap}
-.recent-pos.p1{color:#f59e0b;background:#f59e0b12;border:1px solid #f59e0b30}
-.recent-pos.podium{color:#22c55e;background:#22c55e12;border:1px solid #22c55e30}
-.recent-pos.ok{color:#888;background:#88888812;border:1px solid #88888830}
-.recent-gained{font-size:.65rem;font-weight:700;white-space:nowrap}
+.recent-badge{font-size:.62rem;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;padding:4px 9px;border-radius:3px;border:1px solid;white-space:nowrap}
+.recent-badge.forza{color:#3b82f6;border-color:#3b82f630;background:#3b82f60a}
+.recent-badge.acc{color:#a78bfa;border-color:#a78bfa30;background:#a78bfa0a}
+.recent-badge.f1{color:#ef4444;border-color:#ef444430;background:#ef44440a}
+.recent-circuit{flex:1;font-size:.92rem;color:#e0e0e0;font-weight:700}
+.recent-date{font-size:.72rem;color:#555;white-space:nowrap}
+.recent-lap{font-size:.82rem;color:#f59e0b;font-variant-numeric:tabular-nums;white-space:nowrap}
+.recent-pos{font-size:.75rem;font-weight:700;padding:3px 9px;border-radius:3px;white-space:nowrap}
+.recent-pos.p1{color:#f59e0b;background:#f59e0b14;border:1px solid #f59e0b35}
+.recent-pos.podium{color:#22c55e;background:#22c55e14;border:1px solid #22c55e35}
+.recent-pos.ok{color:#888;background:#88888814;border:1px solid #88888835}
+.recent-gained{font-size:.72rem;font-weight:700;white-space:nowrap}
 .recent-gained.pos{color:#22c55e}
 .recent-gained.neg{color:#ef4444}
-.recent-gained.neu{color:#444}
+.recent-gained.neu{color:#555}
 @media(max-width:640px){
   .page{padding:16px 14px 48px}
   .kpi{min-width:130px;padding:14px 14px}
-  .kpi-val{font-size:1.4rem}
+  .kpi-val{font-size:1.7rem}
   .form-card{flex-direction:column}
   .ctable th:nth-child(3),.ctable td:nth-child(3){display:none}
+  .gtab{font-size:.78rem;padding:10px 14px 10px 0}
 }
 </style>
 </head>
@@ -2423,14 +2737,31 @@ a{color:inherit;text-decoration:none}
 <script>if(location.search.includes('debug=true'))document.getElementById('nav-admin').style.display='';</script>
 <div class="page">
 
+  <!-- Game Tabs -->
+  <div class="gtab-bar" id="gtab-bar">
+    <button class="gtab active" data-game="" onclick="setTab(this)">All Sessions<span class="cnt" id="cnt-all"></span></button>
+    <button class="gtab" data-game="forza_motorsport" onclick="setTab(this)">Forza<span class="cnt" id="cnt-forza"></span></button>
+    <button class="gtab" data-game="acc" onclick="setTab(this)">ACC<span class="cnt" id="cnt-acc"></span></button>
+    <button class="gtab" data-game="f1" onclick="setTab(this)">F1<span class="cnt" id="cnt-f1"></span></button>
+  </div>
+
   <!-- KPI row -->
   <div class="kpi-row" id="kpi-row">
     <div class="kpi"><div class="kpi-label">Total Sessions</div><div class="kpi-val muted" id="kv-total">—</div><div class="kpi-sub" id="ks-total">&nbsp;</div></div>
-    <div class="kpi"><div class="kpi-label">Avg Finish (Real)</div><div class="kpi-val blue" id="kv-finish">—</div><div class="kpi-sub">Race lobbies only</div></div>
+    <div class="kpi"><div class="kpi-label">Avg Finish</div><div class="kpi-val blue" id="kv-finish">—</div><div class="kpi-sub">Race lobbies only</div></div>
     <div class="kpi"><div class="kpi-label">Avg Pos Gained</div><div class="kpi-val green" id="kv-gained">—</div><div class="kpi-sub">From grid position</div></div>
     <div class="kpi"><div class="kpi-label">Win Rate</div><div class="kpi-val amber" id="kv-win">—</div><div class="kpi-sub">Real lobbies only</div></div>
     <div class="kpi"><div class="kpi-label">Podium Rate</div><div class="kpi-val green" id="kv-podium">—</div><div class="kpi-sub">Real lobbies only</div></div>
     <div class="kpi"><div class="kpi-label">Total Laps</div><div class="kpi-val muted" id="kv-laps">—</div><div class="kpi-sub" id="ks-circuits">&nbsp;</div></div>
+  </div>
+
+  <!-- Performance Trend Spark -->
+  <div class="trend-card">
+    <div class="trend-meta">
+      <div class="trend-label">Performance Trend</div>
+      <div class="trend-direction fl" id="trend-dir">—</div>
+    </div>
+    <div class="trend-spark" id="trend-spark"></div>
   </div>
 
   <!-- Current Form -->
@@ -2454,14 +2785,14 @@ a{color:inherit;text-decoration:none}
           <button class="ftog" data-val="20">Last 20</button>
         </div>
       </div>
-      <div class="form-chart" id="form-chart"><span style="color:#222;font-size:.7rem">No race data</span></div>
+      <div class="form-chart" id="form-chart"><span style="color:#333;font-size:.78rem">No race data</span></div>
     </div>
   </div>
 
   <!-- Best Laps Pills -->
   <div class="pills-section">
     <div class="pills-label">Best Laps by Circuit</div>
-    <div class="pills-row" id="pills-row"><span style="color:#222;font-size:.7rem">—</span></div>
+    <div class="pills-row" id="pills-row"><span style="color:#333;font-size:.78rem">—</span></div>
   </div>
 
   <!-- Circuit Table -->
@@ -2471,20 +2802,20 @@ a{color:inherit;text-decoration:none}
       <thead><tr>
         <th>Circuit</th><th>Sessions</th><th>Avg Finish</th><th>Best Lap</th><th>Trend</th>
       </tr></thead>
-      <tbody id="circuit-tbody"><tr><td colspan="5" style="color:#222;padding:20px 12px">—</td></tr></tbody>
+      <tbody id="circuit-tbody"><tr><td colspan="5" style="color:#333;padding:20px 14px">—</td></tr></tbody>
     </table>
   </div>
 
   <!-- Game Cards -->
-  <div class="games-section">
+  <div class="games-section" id="games-section">
     <div class="table-label" style="margin-bottom:12px">By Game</div>
-    <div class="games-grid" id="games-grid"><div style="color:#222;padding:20px">—</div></div>
+    <div class="games-grid" id="games-grid"><div style="color:#333;padding:20px">—</div></div>
   </div>
 
   <!-- Recent Sessions -->
   <div class="recent-section">
     <div class="recent-label">Recent Sessions</div>
-    <div id="recent-feed"><div style="color:#222;padding:20px">—</div></div>
+    <div id="recent-feed"><div style="color:#333;padding:20px">—</div></div>
   </div>
 
 </div>
@@ -2496,9 +2827,23 @@ function fmtDate(iso){if(!iso)return'—';return new Date(iso).toLocaleDateStrin
 function fmtRel(iso){if(!iso)return'';const d=new Date(iso),n=Date.now(),s=Math.floor((n-d)/1000);if(s<60)return s+'s ago';if(s<3600)return Math.floor(s/60)+'m ago';if(s<86400)return Math.floor(s/3600)+'h ago';return Math.floor(s/86400)+'d ago';}
 function p1(v,d=1){return v==null?null:parseFloat(v.toFixed(d));}
 
-let _type='real',_last=10;
+let _type='real',_last=10,_game='';
+let _allTracks=[],_allRecent=[],_allFormData=[];
 
-// ── KPI cards ────────────────────────────────────────────────
+// ── Tab switching ─────────────────────────────────────────────
+function setTab(btn){
+  document.querySelectorAll('.gtab').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  _game=btn.dataset.game;
+  const showGames=!_game;
+  document.getElementById('games-section').style.display=showGames?'':'none';
+  renderTracks();
+  renderRecent();
+  renderForm();
+  renderTrendSpark();
+}
+
+// ── KPI cards ─────────────────────────────────────────────────
 async function loadKPIs(){
   let k={};
   try{k=await fetch('/sessions/career').then(r=>r.json());}catch(e){}
@@ -2515,25 +2860,78 @@ async function loadKPIs(){
   document.getElementById('ks-circuits').textContent=(k.circuit_count||0)+' circuits';
 }
 
-// ── Form chart ────────────────────────────────────────────────
+// ── Tab counts ────────────────────────────────────────────────
+async function loadTabCounts(){
+  let games=[];
+  try{games=await fetch('/sessions/games').then(r=>r.json());}catch(e){}
+  const totals={};
+  let all=0;
+  games.forEach(g=>{totals[g.game]=g.session_count||0;all+=g.session_count||0;});
+  document.getElementById('cnt-all').textContent=all?'('+all+')':'';
+  document.getElementById('cnt-forza').textContent=(totals['forza_motorsport']||0)?'('+(totals['forza_motorsport']||0)+')':'';
+  document.getElementById('cnt-acc').textContent=(totals['acc']||0)?'('+(totals['acc']||0)+')':'';
+  document.getElementById('cnt-f1').textContent=(totals['f1']||0)?'('+(totals['f1']||0)+')':'';
+  renderGames(games);
+}
+
+// ── Trend spark ───────────────────────────────────────────────
 function posToPercentile(fp){if(fp==null)return null;return Math.max(5,Math.min(100,Math.round(100-(fp-1)*6)));}
-function pctColor(p){const h=Math.round(p*1.2);return`hsl(${h},80%,42%)`;}
-async function loadForm(){
-  let data=[];
-  try{data=await fetch('/sessions/form?type='+_type+'&last='+_last).then(r=>r.json());}catch(e){}
+
+function renderTrendSpark(){
+  const data=_allFormData.filter(s=>!_game||s.game===_game);
+  const el=document.getElementById('trend-spark');
+  const dir=document.getElementById('trend-dir');
+  const withPos=data.filter(s=>s.finish_pos!=null);
+  if(withPos.length<2){
+    el.innerHTML='<svg viewBox="0 0 400 44" preserveAspectRatio="none"><line x1="0" y1="22" x2="400" y2="22" stroke="#1e1e1e" stroke-width="1.5"/></svg>';
+    dir.textContent='—';dir.className='trend-direction fl';
+    return;
+  }
+  const pcts=withPos.map(s=>posToPercentile(s.finish_pos));
+  const w=400,h=44,pad=3;
+  const mn=Math.min(...pcts),mx=Math.max(...pcts),rng=mx-mn||1;
+  const xs=pcts.map((_,i)=>pad+(w-pad*2)*i/Math.max(pcts.length-1,1));
+  const ys=pcts.map(v=>h-pad-(h-pad*2)*(v-mn)/rng);
+  const pts=xs.map((x,i)=>x.toFixed(1)+','+ys[i].toFixed(1)).join(' ');
+  // gradient: first half avg vs second half avg
+  const half=Math.floor(pcts.length/2);
+  const a1=pcts.slice(0,half).reduce((a,b)=>a+b,0)/(half||1);
+  const a2=pcts.slice(half).reduce((a,b)=>a+b,0)/((pcts.length-half)||1);
+  const diff=a2-a1;
+  const col=diff>4?'#22c55e':diff<-4?'#ef4444':'#888';
+  // last dot
+  const lx=xs[xs.length-1],ly=ys[ys.length-1];
+  el.innerHTML=`<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="width:100%;height:100%">
+    <polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" opacity=".85"/>
+    <circle cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="3" fill="${col}" opacity=".9"/>
+  </svg>`;
+  if(diff>4){dir.textContent='▲ Improving';dir.className='trend-direction up';}
+  else if(diff<-4){dir.textContent='▼ Declining';dir.className='trend-direction dn';}
+  else{dir.textContent='— Steady';dir.className='trend-direction fl';}
+}
+
+// ── Form chart ────────────────────────────────────────────────
+function renderForm(){
+  const data=_allFormData.filter(s=>!_game||s.game===_game);
+  const sliced=data.slice(-_last);
   const el=document.getElementById('form-chart');
-  if(!data.length){el.innerHTML='<span style="color:#222;font-size:.7rem">No race data</span>';updateFormMeta([]);return;}
-  el.innerHTML=data.map(s=>{
+  if(!sliced.length){el.innerHTML='<span style="color:#333;font-size:.78rem">No race data</span>';updateFormMeta([]);return;}
+  el.innerHTML=sliced.map(s=>{
     const pct=posToPercentile(s.finish_pos);
     const h=pct!=null?Math.round(pct+20):0;
     const col=pct!=null?`hsl(${h},70%,38%)`:'#1a1a1a';
     const ht=pct!=null?(pct+'% &bull; P'+s.finish_pos+' &bull; '+(s.track||'?')):'(no pos) &bull; '+(s.track||'?');
     const hpct=pct!=null?pct:20;
-    return`<div class="bar" style="height:${hpct}%;background:${col}" title="">
+    return`<div class="bar" style="height:${hpct}%;background:${col}">
       <div class="bar-tip">${ht}</div>
     </div>`;
   }).join('');
-  updateFormMeta(data);
+  updateFormMeta(sliced);
+}
+async function loadFormData(){
+  try{_allFormData=await fetch('/sessions/form?type='+_type+'&last=50').then(r=>r.json());}catch(e){_allFormData=[];}
+  renderForm();
+  renderTrendSpark();
 }
 function updateFormMeta(data){
   const el=document.getElementById('form-trend');
@@ -2559,35 +2957,40 @@ function updateFormMeta(data){
 document.getElementById('type-filters').addEventListener('click',e=>{
   const b=e.target.closest('.ftog');if(!b)return;
   document.querySelectorAll('#type-filters .ftog').forEach(x=>x.classList.remove('on'));
-  b.classList.add('on');_type=b.dataset.val;loadForm();
+  b.classList.add('on');_type=b.dataset.val;loadFormData();
 });
 document.getElementById('last-filters').addEventListener('click',e=>{
   const b=e.target.closest('.ftog');if(!b)return;
   document.querySelectorAll('#last-filters .ftog').forEach(x=>x.classList.remove('on'));
-  b.classList.add('on');_last=+b.dataset.val;loadForm();
+  b.classList.add('on');_last=+b.dataset.val;renderForm();
 });
 
-// ── Pills + circuit table ─────────────────────────────────────
+// ── Tracks (pills + table) ────────────────────────────────────
 async function loadTracks(){
-  let tracks=[];
-  try{tracks=await fetch('/sessions/tracks').then(r=>r.json());}catch(e){}
+  try{_allTracks=await fetch('/sessions/tracks').then(r=>r.json());}catch(e){_allTracks=[];}
+  renderTracks();
+}
+function renderTracks(){
+  const tracks=_allTracks.filter(t=>!_game||t.game===_game||!t.game);
   // pills
   const pr=document.getElementById('pills-row');
   const withLap=tracks.filter(t=>t.best_lap_time_s);
-  if(withLap.length){
-    pr.innerHTML=withLap.map(t=>`
-      <div class="pill" onclick="location.href='/sessions/track?name='+encodeURIComponent('${t.track.replace(/'/g,"\\'")}')">
-        <div class="pill-circuit">${t.track}</div>
-        <div class="pill-time">${fmtLap(t.best_lap_time_s)}</div>
-      </div>`).join('');
-  } else {pr.innerHTML='<span style="color:#222;font-size:.7rem">No lap data yet</span>';}
+  pr.innerHTML=withLap.length?withLap.map(t=>{
+    const esc=encodeURIComponent(t.track);
+    const gp=_game?('&game='+encodeURIComponent(_game)):'';
+    return`<div class="pill" onclick="location.href='/sessions/track?name=${esc}${gp}'">
+      <div class="pill-circuit">${t.track}</div>
+      <div class="pill-time">${fmtLap(t.best_lap_time_s)}</div>
+    </div>`;
+  }).join(''):'<span style="color:#333;font-size:.78rem">No lap data yet</span>';
   // table
   const tbody=document.getElementById('circuit-tbody');
-  if(!tracks.length){tbody.innerHTML='<tr><td colspan="5" style="color:#222;padding:20px 12px">No sessions yet</td></tr>';return;}
+  if(!tracks.length){tbody.innerHTML='<tr><td colspan="5" style="color:#333;padding:20px 14px">No sessions yet</td></tr>';return;}
   tbody.innerHTML=tracks.map(t=>{
     const trend=t.trend==='up'?'<span class="td-trend-up">▲</span>':t.trend==='dn'?'<span class="td-trend-dn">▼</span>':'<span class="td-trend-fl">—</span>';
-    const esc=t.track.replace(/'/g,"\\'");
-    return`<tr onclick="location.href='/sessions/track?name='+encodeURIComponent('${esc}')">
+    const esc=encodeURIComponent(t.track);
+    const gp=_game?('&game='+encodeURIComponent(_game)):'';
+    return`<tr onclick="location.href='/sessions/track?name=${esc}${gp}'">
       <td class="td-track">${t.track}</td>
       <td class="td-num">${t.session_count}</td>
       <td class="td-blue">—</td>
@@ -2606,14 +3009,12 @@ function sparkSVG(vals){
   const ys=vals.map(v=>h-pad-(h-pad*2)*(v-mn)/rng);
   const pts=xs.map((x,i)=>x+','+ys[i]).join(' ');
   return`<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" class="gc-spark">
-    <polyline points="${pts}" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" opacity=".7"/>
+    <polyline points="${pts}" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" opacity=".8"/>
   </svg>`;
 }
-async function loadGames(){
-  let games=[];
-  try{games=await fetch('/sessions/games').then(r=>r.json());}catch(e){}
+function renderGames(games){
   const grid=document.getElementById('games-grid');
-  if(!games.length){grid.innerHTML='<div style="color:#222;padding:20px">No sessions</div>';return;}
+  if(!games.length){grid.innerHTML='<div style="color:#333;padding:20px">No sessions</div>';return;}
   grid.innerHTML=games.map(g=>{
     const label=GL[g.game]||g.game;
     const desc=GD[g.game]||'';
@@ -2636,12 +3037,16 @@ async function loadGames(){
 
 // ── Recent feed ───────────────────────────────────────────────
 async function loadRecent(){
-  let sessions=[];
-  try{sessions=await fetch('/sessions/recent').then(r=>r.json());}catch(e){}
+  try{_allRecent=await fetch('/sessions/recent').then(r=>r.json());}catch(e){_allRecent=[];}
+  renderRecent();
+}
+function renderRecent(){
+  const sessions=_allRecent.filter(s=>!_game||s.game===_game||
+    (_game==='forza_motorsport'&&s.game==='forza_horizon_5'));
   const feed=document.getElementById('recent-feed');
-  if(!sessions.length){feed.innerHTML='<div style="color:#222;padding:20px">No sessions yet</div>';return;}
+  if(!sessions.length){feed.innerHTML='<div style="color:#333;padding:20px">No sessions yet</div>';return;}
   feed.innerHTML=sessions.map(s=>{
-    const game=s.game==='forza_motorsport'?'forza':s.game==='forza_horizon_5'?'forza':s.game||'?';
+    const gameKey=s.game==='forza_motorsport'||s.game==='forza_horizon_5'?'forza':s.game||'?';
     const label=(GL[s.game]||s.game||'?').toUpperCase();
     const fp=s.finish_pos,gp=s.grid_pos;
     let posHtml='';
@@ -2657,7 +3062,7 @@ async function loadRecent(){
     }
     const href="/sessions/session?id="+encodeURIComponent(s.session_id)+"&game="+encodeURIComponent(s.game||'')+"&track="+encodeURIComponent(s.track||'');
     return`<div class="recent-row" onclick="location.href='${href}'">
-      <span class="recent-badge ${game}">${label}</span>
+      <span class="recent-badge ${gameKey}">${label}</span>
       <span class="recent-circuit">${s.track||'Unknown'}</span>
       <span class="recent-date">${fmtRel(s.started_at)}</span>
       <span class="recent-lap">${fmtLap(s.best_lap_time_s)}</span>
@@ -2667,8 +3072,8 @@ async function loadRecent(){
   }).join('');
 }
 
-// ── Boot ──────────────────────────────────────────────────────
-Promise.all([loadKPIs(),loadForm(),loadTracks(),loadGames(),loadRecent()]);
+// ── Boot ─────────────────────────────────────────────────────
+Promise.all([loadKPIs(),loadTabCounts(),loadFormData(),loadTracks(),loadRecent()]);
 </script>
 </body>
 </html>
@@ -5280,6 +5685,17 @@ async def handle_status(reader, writer):
         elif path == "/setup":
             writer.write(_http_response("200 OK", "text/html", SETUP_HTML.encode()))
 
+        elif path == "/setup/ips":
+            uptime = int(time.time() - _listener_started_at) if _listener_started_at else 0
+            payload = {
+                "ips": _get_local_ips(),
+                "ports": config["ports"],
+                "uptime_s": uptime,
+                "udp_received": state["udp_received"],
+                "udp_last_at": state["udp_last_at"],
+            }
+            writer.write(_http_response("200 OK", "application/json", json.dumps(payload).encode()))
+
         elif path == "/config" and method == "GET":
             payload = {**config, "disk": disk_info()}
             writer.write(_http_response("200 OK", "application/json", json.dumps(payload, indent=2).encode()))
@@ -5840,6 +6256,8 @@ async def handle_status(reader, writer):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 async def main():
+    global _listener_started_at
+    _listener_started_at = time.time()
     ensure_storage()
     _db_init()
     threading.Thread(target=_backfill_lap_samples, daemon=True).start()

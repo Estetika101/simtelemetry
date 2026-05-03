@@ -37,15 +37,46 @@ All three listen simultaneously. Switch games without changing anything.
 
 ## Quick Start
 
+**Mac / Linux / Pi**
 ```bash
 git clone https://github.com/Estetika101/pacefinderapp
 cd pacefinderapp
 python3 listener.py
 ```
 
+**Windows**
+```
+git clone https://github.com/Estetika101/pacefinderapp
+cd pacefinderapp
+python listener.py
+```
+Python 3.9+ required — download from [python.org/downloads](https://python.org/downloads). Check "Add Python to PATH" during install.
+
 Open `http://localhost:8000` and point your game's Data Out to this machine's IP.
 
 Full setup guide at [pacefinder.app](https://pacefinder.app#install)
+
+---
+
+## Auto-start
+
+### Mac
+```bash
+bash install-mac.sh
+```
+Installs a launchd service that starts Pacefinder on login and restarts it if it crashes.
+Logs: `~/Library/Logs/pacefinder.log`
+
+### Linux / Pi
+```bash
+sudo cp simtelemetry.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable simtelemetry
+sudo systemctl start simtelemetry
+```
+
+### Windows
+Open Task Scheduler → Create Basic Task → Trigger: At log on → Action: Start `pythonw.exe C:\path\to\listener.py`.
 
 ---
 
@@ -169,16 +200,8 @@ sudo journalctl -u simtelemetry -f
 
 ## License
 
-<<<<<<< HEAD
-MIT
-
----
-
-*Forza Motorsport is a trademark of Microsoft. Pacefinder is not affiliated with Microsoft, Codemasters, or Kunos Simulazioni.*
-=======
 MIT — read it, run it, fork it.
 
 ---
 
 *Forza Motorsport is a trademark of Microsoft. Pacefinder is not affiliated with Microsoft, Codemasters, or Kunos Simulazioni.*
->>>>>>> 04b817f (f1 and acc listener fixes)
