@@ -3354,7 +3354,7 @@ async function init(){
   grid.innerHTML=_tracks.map((t,i)=>{
     const arrow=t.trend==='up'?'<span class="trend-up">▲</span>':t.trend==='dn'?'<span class="trend-dn">▼</span>':'<span class="trend-fl">—</span>';
     return `<div class="tc" data-i="${i}">
-      <div class="tc-top"><div class="tc-name">${esc(t.track)}</div>${arrow}</div>
+      <div class="tc-top"><div class="tc-name">${t.track==='unknown'?'Unknown Track':esc(t.track)}</div>${arrow}</div>
       <div class="tc-stats">
         <div class="tc-stat"><div class="v">${fmtLap(t.best_lap_time_s)}</div><div class="l">Best Lap</div></div>
         <div class="tc-stat"><div class="v">${t.session_count}</div><div class="l">Sessions</div></div>
@@ -3369,7 +3369,7 @@ async function init(){
       if(_game) url+='&game='+encodeURIComponent(_game);
       location.href=url;
     });
-    loadTip(_tracks[i].track,i);
+    if(_tracks[i].track!=='unknown') loadTip(_tracks[i].track,i);
   });
 }
 async function loadTip(track,i){
@@ -5171,7 +5171,7 @@ def _db_tracks_index(game: Optional[str] = None) -> list:
     with _db_lock:
         conn = _db_connect()
         try:
-            where = "WHERE track IS NOT NULL AND track != 'unknown'"
+            where = "WHERE track IS NOT NULL"
             params: list = []
             if game:
                 where += " AND game=?"
