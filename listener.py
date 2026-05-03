@@ -1842,8 +1842,8 @@ function tyreClass(t){
 let _liveGame=null;
 function setSlip(pfx,val){
   const v=val??0;
-  // ACC wheelSlip is in m/s (0–3 range); Forza/F1 are dimensionless ratios (0–0.3 range)
-  const scale=(_liveGame==='acc')?0.5:0.15;
+  // ACC wheelSlip is in m/s (0–3 range); Forza/F1 are dimensionless ratios (0–1 range)
+  const scale=(_liveGame==='acc')?0.5:0.5;
   const pct=Math.min(100,v/scale*100);
   const col=slipColor(v/scale*0.5);
   $(pfx+'-b').style.height=pct+'%';
@@ -1907,7 +1907,7 @@ es.onmessage=e=>{
   setSlip('srl',d.slip_rl);
   setSlip('srr',d.slip_rr);
   // flash slip panel on oversteer — threshold is game-specific (ACC in m/s, Forza/F1 normalized ratio)
-  const _slipAlert=(_liveGame==='acc')?0.6:0.35;
+  const _slipAlert=(_liveGame==='acc')?0.6:0.6;
   if(recv&&((d.slip_rl||0)>_slipAlert||(d.slip_rr||0)>_slipAlert)) flash('slip-panel');
 
   // timing
