@@ -77,6 +77,7 @@ IDLE_TIMEOUT_S    = config["idle_timeout_s"]
 STATUS_PORT       = config["status_port"]
 LOG_LEVEL         = logging.INFO
 _listener_started_at = None  # float, set in main()
+_DEMO_DB_PATH: Optional[str] = None  # set by --demo flag; overrides storage_path()/simtelemetry.db
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
@@ -4799,7 +4800,7 @@ init();
 _db_lock = threading.Lock()
 
 def _db_connect() -> sqlite3.Connection:
-    db_path = storage_path() / "simtelemetry.db"
+    db_path = Path(_DEMO_DB_PATH) if _DEMO_DB_PATH else storage_path() / "simtelemetry.db"
     conn = sqlite3.connect(str(db_path), timeout=10, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -6389,45 +6390,61 @@ async def handle_status(reader, writer):
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
-async def main():
+async def main(demo_mode: bool = False):
     global _listener_started_at
     _listener_started_at = time.time()
     ensure_storage()
     _db_init()
     threading.Thread(target=_backfill_lap_samples, daemon=True).start()
-    log.info("Pacefinder listener starting...")
+    log.info("Pacefinder listener starting%s...", " [DEMO MODE]" if demo_mode else "")
 
     loop = asyncio.get_event_loop()
 
-    parsers = {
-        "forza_motorsport": parse_forza,
-        "acc":              parse_acc,
-        "f1":               parse_f1,
-    }
+    if not demo_mode:
+        parsers = {
+            "forza_motorsport": parse_forza,
+            "acc":              parse_acc,
+            "f1":               parse_f1,
+        }
 
-    for game, port in PORTS.items():
-        try:
-            await loop.create_datagram_endpoint(
-                lambda g=game, p=parsers[game]: TelemetryProtocol(g, p),
-                local_addr=("0.0.0.0", port),
-            )
-            state["bound_ports"][game] = port
-            log.info(f"Listening for {game} on UDP port {port}")
-        except OSError as e:
-            log.error(f"Failed to bind {game} on port {port}: {e} — F1/ACC/Forza port conflict?")
+        for game, port in PORTS.items():
+            try:
+                await loop.create_datagram_endpoint(
+                    lambda g=game, p=parsers[game]: TelemetryProtocol(g, p),
+                    local_addr=("0.0.0.0", port),
+                )
+                state["bound_ports"][game] = port
+                log.info(f"Listening for {game} on UDP port {port}")
+            except OSError as e:
+                log.error(f"Failed to bind {game} on port {port}: {e} — F1/ACC/Forza port conflict?")
 
-    asyncio.create_task(session_watchdog())
+        asyncio.create_task(session_watchdog())
 
     server = await asyncio.start_server(handle_status, "0.0.0.0", STATUS_PORT)
     log.info(f"Storage path: {storage_path()}")
-    log.info(f"Dashboard at http://pi.local:{STATUS_PORT}/")
-    log.info(f"Setup     at http://pi.local:{STATUS_PORT}/setup")
-    log.info(f"Admin     at http://pi.local:{STATUS_PORT}/admin")
-    log.info(f"Status API at http://pi.local:{STATUS_PORT}/status")
+    log.info(f"Dashboard at http://localhost:{STATUS_PORT}/")
+    log.info(f"Setup     at http://localhost:{STATUS_PORT}/setup")
+    log.info(f"Admin     at http://localhost:{STATUS_PORT}/admin")
+    log.info(f"Status API at http://localhost:{STATUS_PORT}/status")
 
     async with server:
         await server.serve_forever()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import argparse as _argparse
+    _parser = _argparse.ArgumentParser(description="Pacefinder listener")
+    _parser.add_argument("--demo", action="store_true",
+                         help="Demo mode: skip UDP listeners, serve HTTP only")
+    _parser.add_argument("--db", type=str, default=None,
+                         help="Path to SQLite database file (used with --demo)")
+    _parser.add_argument("--port", type=int, default=None,
+                         help="HTTP server port (overrides config/default)")
+    _args = _parser.parse_args()
+
+    if _args.demo and _args.db:
+        _DEMO_DB_PATH = _args.db
+    if _args.port:
+        STATUS_PORT = _args.port
+
+    asyncio.run(main(demo_mode=_args.demo))

@@ -1,0 +1,77 @@
+name: Update marketing screenshots
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  screenshots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout pacefinderapp
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install playwright anthropic
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: Seed demo database
+        run: python3 scripts/seed_demo_data.py --db /tmp/demo.db
+
+      - name: Start listener in demo mode
+        run: |
+          python3 listener.py --demo --db /tmp/demo.db --port 8765 &
+          echo $! > /tmp/listener.pid
+
+      - name: Wait for listener to be ready
+        run: |
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8765/health > /dev/null 2>&1; then
+              echo "Listener ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          curl -sf http://localhost:8765/health || (echo "Listener failed to start" && exit 1)
+
+      - name: Capture screenshots
+        run: python3 scripts/screenshot.py --port 8765 --out screenshots/
+
+      - name: Stop listener
+        if: always()
+        run: |
+          if [ -f /tmp/listener.pid ]; then
+            kill $(cat /tmp/listener.pid) 2>/dev/null || true
+          fi
+
+      - name: Checkout marketing site
+        uses: actions/checkout@v4
+        with:
+          repository: Estetika101/pacefinder.app
+          token: ${{ secrets.MARKETING_SITE_TOKEN }}
+          path: marketing-site
+
+      - name: Copy screenshots to marketing site
+        run: |
+          mkdir -p marketing-site/public/screenshots
+          cp screenshots/*.png marketing-site/public/screenshots/
+
+      - name: Commit and push screenshots
+        run: |
+          cd marketing-site
+          git config user.email "github-actions@pacefinder.app"
+          git config user.name "Pacefinder Bot"
+          git add public/screenshots/
+          git diff --staged --quiet || git commit -m "chore: update screenshots from ${{ github.ref_name }}"
+          git push
