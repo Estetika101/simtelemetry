@@ -939,8 +939,9 @@ state = {
 active_sessions: dict[str, Session] = {}
 
 def update_state(game: str, session: Session, parsed: dict):
-    if parsed.get("_packet_type") in ("motion", "lap_data", None) and "_packet_type" in parsed:
-        return  # don't overwrite telemetry state with motion or lap metadata
+    # Skip packets that carry no telemetry (motion, lap metadata, ACC graphics)
+    if "_packet_type" in parsed and parsed["_packet_type"] in ("motion", "lap_data", "graphics"):
+        return
     state["status"]       = "receiving" if session._is_driving(parsed) else "idle"
     state["game"]         = game
     state["session_id"]   = session.session_id
@@ -970,9 +971,11 @@ def update_state(game: str, session: Session, parsed: dict):
     if parsed.get("last_lap_time"):
         state["last_lap_time_s"] = parsed["last_lap_time"]
     for corner in ("fl", "fr", "rl", "rr"):
-        v = parsed.get(f"tire_temp_{corner}")          # Forza key
+        v = parsed.get(f"tire_temp_{corner}")               # Forza
         if v is None:
-            v = parsed.get(f"tyre_surface_temp_{corner}")  # F1 key
+            v = parsed.get(f"tyre_surface_temp_{corner}")   # F1
+        if v is None:
+            v = parsed.get(f"tyre_core_temp_{corner}")      # ACC
         if v is not None:
             state[f"tyre_{corner}"] = round(v, 1)
     state["last_packet_at"]      = datetime.now().isoformat()
@@ -1025,11 +1028,20 @@ class TelemetryProtocol(asyncio.DatagramProtocol):
 
         if not driving:
             session.last_packet = time.time()
-            # F1 LapData arrives as non-driving; cache for merging into next telemetry packet
-            if parsed.get("_packet_type") == "lap_data":
+            ptype = parsed.get("_packet_type")
+            # F1 LapData — cache for merging into next telemetry packet
+            if ptype == "lap_data":
                 session._lap_cache.update(
                     {k: v for k, v in parsed.items() if not k.startswith("_") and v is not None}
                 )
+                rp = parsed.get("race_position")
+                if rp is not None and rp > 0:
+                    session._race_positions.append(rp)
+            # ACC Graphics — update session metadata (ingest() never called for non-driving packets)
+            elif ptype == "graphics":
+                st = parsed.get("session_type", "unknown")
+                if st and st != "unknown":
+                    session.session_type = st
                 rp = parsed.get("race_position")
                 if rp is not None and rp > 0:
                     session._race_positions.append(rp)
@@ -1342,11 +1354,16 @@ body{background:var(--bg);color:var(--text-head);font-family:'Courier New',monos
 .tb-stat{font-size:var(--text-md);letter-spacing:2px;text-transform:uppercase;color:var(--text-muted);min-width:110px}
 .tb-stat.receiving{color:var(--accent)}
 .tb-stat.race_ended{color:var(--warn)}
-.tb-meta{display:flex;gap:20px;flex:1;font-size:.88rem;letter-spacing:1px;overflow:hidden}
-.tb-game{color:var(--text-label);text-transform:uppercase}
-.tb-track{color:#ddd;font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.tb-drs{color:var(--accent);font-weight:bold;display:none;letter-spacing:2px}
-.tb-cmp{color:var(--n-100)}
+.tb-meta{display:flex;align-items:center;gap:14px;flex:1;overflow:hidden}
+.tb-game{font-size:.72rem;font-weight:700;letter-spacing:2px;text-transform:uppercase;padding:3px 10px;border-radius:3px;border:1px solid;white-space:nowrap}
+.tb-game.game-forza{color:#3b82f6;border-color:#3b82f640;background:#3b82f60c}
+.tb-game.game-acc{color:#a78bfa;border-color:#a78bfa40;background:#a78bfa0c}
+.tb-game.game-f1{color:#ef4444;border-color:#ef444440;background:#ef44440c}
+.tb-game.game-none{color:#444;border-color:#1e1e1e;background:none}
+.tb-sep{color:#333;font-size:.7rem}
+.tb-track{font-size:.82rem;color:#d0d0d0;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.5px}
+.tb-drs{color:var(--accent);font-weight:bold;display:none;letter-spacing:2px;font-size:.75rem}
+.tb-cmp{color:#888;font-size:.75rem}
 .tb-nav{display:flex;gap:14px;flex:none}
 .tb-nav a{font-size:.8rem;color:var(--text-muted);text-decoration:none;letter-spacing:1px;text-transform:uppercase}
 .tb-nav a:hover{color:#ccc}
@@ -1475,7 +1492,8 @@ body{background:var(--bg);color:var(--text-head);font-family:'Courier New',monos
   <div class="dot" id="dot"></div>
   <span class="tb-stat" id="tb-stat">IDLE</span>
   <div class="tb-meta">
-    <span class="tb-game" id="tb-game">—</span>
+    <span class="tb-game game-none" id="tb-game">—</span>
+    <span class="tb-sep">·</span>
     <span class="tb-track" id="tb-track">—</span>
     <span class="tb-drs" id="tb-drs">DRS</span>
     <span class="tb-cmp" id="tb-cmp"></span>
@@ -1712,7 +1730,11 @@ es.onmessage=e=>{
   $('dot').className='dot '+(recv?'receiving':ended?'race_ended':'idle');
   $('tb-stat').textContent=ended?'RACE ENDED':(d.status||'IDLE').toUpperCase();
   $('tb-stat').className='tb-stat'+(recv?' receiving':ended?' race_ended':'');
-  $('tb-game').textContent=d.game?d.game.replace(/_/g,' ').toUpperCase():'—';
+  const gameLabels={'forza_motorsport':'Forza Motorsport','forza_horizon_5':'Forza Horizon','acc':'ACC','f1':'F1 2024'};
+  const gameClsMap={'forza_motorsport':'forza','forza_horizon_5':'forza','acc':'acc','f1':'f1'};
+  const gEl=$('tb-game');
+  gEl.textContent=d.game?gameLabels[d.game]||d.game.replace(/_/g,' ').toUpperCase():'—';
+  gEl.className='tb-game game-'+(d.game?gameClsMap[d.game]||'none':'none');
   $('tb-track').textContent=d.track&&d.track!=='unknown'?d.track:'—';
   $('tb-drs').style.display=d.drs?'inline':'none';
   $('tb-cmp').textContent=d.tyre_compound||'';
