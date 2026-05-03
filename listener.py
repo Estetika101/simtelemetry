@@ -1900,15 +1900,14 @@ es.onmessage=e=>{
   $('brk-b').style.height=brk+'%';
   $('brk-v').textContent=Math.round(brk)+'%';
   // flash only while actively receiving — suppress during idle/race_ended
-  if(recv&&brk>15&&thr>30) flash('thr-row');
   if(recv&&brk>92) flash('brk-row');
 
   // slip
   _liveGame=d.game;
   setSlip('srl',d.slip_rl);
   setSlip('srr',d.slip_rr);
-  // flash slip panel on oversteer — threshold is game-specific
-  const _slipAlert=(_liveGame==='acc')?0.3:0.1;
+  // flash slip panel on oversteer — threshold is game-specific (ACC in m/s, Forza/F1 normalized ratio)
+  const _slipAlert=(_liveGame==='acc')?0.6:0.35;
   if(recv&&((d.slip_rl||0)>_slipAlert||(d.slip_rr||0)>_slipAlert)) flash('slip-panel');
 
   // timing
