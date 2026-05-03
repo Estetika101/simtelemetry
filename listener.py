@@ -268,6 +268,8 @@ def parse_forza(data: bytes) -> Optional[dict]:
     try:
         values = struct.unpack(fmt, data)
         parsed = dict(zip(FM_FIELDS, values))
+        if not parsed.get("is_race_on"):
+            return None  # race not active — values are stale/garbage
         if len(data) == FM_PACKET_SIZE_FH:
             parsed["tire_wear_fl"]  = values[len(FM_FIELDS)]
             parsed["tire_wear_fr"]  = values[len(FM_FIELDS) + 1]
@@ -988,16 +990,17 @@ def update_state(game: str, session: Session, parsed: dict):
         state["best_lap_time_s"] = round(bl_pkt, 3)
         if session.best_lap_time_s is None or bl_pkt < session.best_lap_time_s:
             session.best_lap_time_s = bl_pkt
-    state["speed_mph"]    = parsed.get("speed_mph", state["speed_mph"])
-    state["throttle_pct"] = parsed.get("throttle_pct", state["throttle_pct"])
-    state["brake_pct"]    = parsed.get("brake_pct", state["brake_pct"])
+    _driving = session._is_driving(parsed)
+    state["speed_mph"]    = parsed.get("speed_mph", state["speed_mph"]) if _driving else 0
+    state["throttle_pct"] = parsed.get("throttle_pct", state["throttle_pct"]) if _driving else 0
+    state["brake_pct"]    = parsed.get("brake_pct", state["brake_pct"]) if _driving else 0
     state["gear"]         = parsed.get("gear", state["gear"])
     state["rpm"]            = parsed.get("rpm", parsed.get("current_engine_rpm", state["rpm"]))
     if parsed.get("engine_max_rpm", 0) > 2000:
         state["engine_max_rpm"] = parsed["engine_max_rpm"]
-    state["steer"]        = round(parsed.get("steer", state["steer"]), 3)
-    state["slip_rl"]      = round(parsed.get("slip_ratio_rl", state["slip_rl"]), 4)
-    state["slip_rr"]      = round(parsed.get("slip_ratio_rr", state["slip_rr"]), 4)
+    state["steer"]        = round(parsed.get("steer", state["steer"]), 3) if _driving else 0
+    state["slip_rl"]      = round(parsed.get("slip_ratio_rl", state["slip_rl"]), 4) if _driving else 0
+    state["slip_rr"]      = round(parsed.get("slip_ratio_rr", state["slip_rr"]), 4) if _driving else 0
     state["g_lat"]        = round(parsed.get("g_lat", state["g_lat"]), 3)
     state["g_lon"]        = round(parsed.get("g_lon", state["g_lon"]), 3)
     state["drs"]          = parsed.get("drs", state["drs"])
@@ -1896,10 +1899,9 @@ es.onmessage=e=>{
   $('thr-v').textContent=Math.round(thr)+'%';
   $('brk-b').style.height=brk+'%';
   $('brk-v').textContent=Math.round(brk)+'%';
-  // flash throttle row when braking and on throttle simultaneously (conflicting inputs)
-  if(brk>15&&thr>30) flash('thr-row');
-  // flash brake row at near-lock ABS territory
-  if(brk>92) flash('brk-row');
+  // flash only while actively receiving — suppress during idle/race_ended
+  if(recv&&brk>15&&thr>30) flash('thr-row');
+  if(recv&&brk>92) flash('brk-row');
 
   // slip
   _liveGame=d.game;
@@ -1907,7 +1909,7 @@ es.onmessage=e=>{
   setSlip('srr',d.slip_rr);
   // flash slip panel on oversteer — threshold is game-specific
   const _slipAlert=(_liveGame==='acc')?0.3:0.1;
-  if((d.slip_rl||0)>_slipAlert||(d.slip_rr||0)>_slipAlert) flash('slip-panel');
+  if(recv&&((d.slip_rl||0)>_slipAlert||(d.slip_rr||0)>_slipAlert)) flash('slip-panel');
 
   // timing
   $('t-cur').textContent=fmt(d.current_lap_time);
@@ -1923,7 +1925,7 @@ es.onmessage=e=>{
     dEl.textContent=sign+delta.toFixed(3)+'s';
     dEl.className='delta-val '+(delta<-0.01?'ahead':delta>0.01?'behind':'even');
     // flash delta when significantly behind pace
-    if(delta>1.5) flash('t-delta');
+    if(recv&&delta>1.5) flash('t-delta');
   } else {
     dEl.textContent='—'; dEl.className='delta-val even';
   }
