@@ -982,6 +982,12 @@ def update_state(game: str, session: Session, parsed: dict):
     state["packet_count"] = session.packet_count
     state["lap"]          = session.current_lap_num
     state["best_lap_time_s"] = session.best_lap_time_s
+    # Forza broadcasts best_lap_time in every packet — use it as the authoritative value
+    bl_pkt = parsed.get("best_lap_time")
+    if bl_pkt and bl_pkt > 0:
+        state["best_lap_time_s"] = round(bl_pkt, 3)
+        if session.best_lap_time_s is None or bl_pkt < session.best_lap_time_s:
+            session.best_lap_time_s = bl_pkt
     state["speed_mph"]    = parsed.get("speed_mph", state["speed_mph"])
     state["throttle_pct"] = parsed.get("throttle_pct", state["throttle_pct"])
     state["brake_pct"]    = parsed.get("brake_pct", state["brake_pct"])
@@ -1154,7 +1160,7 @@ def _build_inject_packets(game: str, p: dict) -> list:
             0.0, 0.0, 0.0,                                         # angular velocity
             0.0, 0.0, 0.0,                                         # yaw pitch roll
             0.5, 0.5, 0.5, 0.5,                                    # norm suspension travel x4
-            0.0, 0.0, 0.0, 0.0,                                    # tire slip ratio x4
+            0.0, 0.0, max(0.0,(speed_mph-20)/300), max(0.0,(speed_mph-20)/280),  # tire slip ratio x4
             speed_ms*4, speed_ms*4, speed_ms*4, speed_ms*4,        # wheel rotation speed x4
             0.0, 0.0, 0.0, 0.0,                                    # rumble strip x4
             0.0, 0.0, 0.0, 0.0,                                    # puddle x4
@@ -1221,7 +1227,9 @@ def _build_inject_packets(game: str, p: dict) -> list:
         slip_data = struct.pack("<ffff", slip_scale * 0.5, slip_scale * 0.5,
                                 slip_scale, slip_scale * 1.1)
         motionex = hdr(13) + pre_slip + slip_data
-        return [sess, motionex, lapdata, hdr(6) + car]
+        # Send car first to create the session, then motionex+lapdata to prime caches,
+        # then car again so the second telemetry packet sees the merged slip+lap data.
+        return [sess, hdr(6) + car, motionex, lapdata, hdr(6) + car]
 
     return []
 
@@ -1778,10 +1786,13 @@ function tyreClass(t){
   return'over';
 }
 
+let _liveGame=null;
 function setSlip(pfx,val){
   const v=val??0;
-  const pct=Math.min(100,v/0.5*100);
-  const col=slipColor(v);
+  // ACC wheelSlip is in m/s (0–3 range); Forza/F1 are dimensionless ratios (0–0.3 range)
+  const scale=(_liveGame==='acc')?0.5:0.15;
+  const pct=Math.min(100,v/scale*100);
+  const col=slipColor(v/scale*0.5);
   $(pfx+'-b').style.height=pct+'%';
   $(pfx+'-b').style.background=col;
   $(pfx+'-v').textContent=val!=null?v.toFixed(3):'—';
@@ -1841,10 +1852,12 @@ es.onmessage=e=>{
   if(brk>92) flash('brk-row');
 
   // slip
+  _liveGame=d.game;
   setSlip('srl',d.slip_rl);
   setSlip('srr',d.slip_rr);
-  // flash slip panel on oversteer threshold
-  if((d.slip_rl||0)>0.3||(d.slip_rr||0)>0.3) flash('slip-panel');
+  // flash slip panel on oversteer — threshold is game-specific
+  const _slipAlert=(_liveGame==='acc')?0.3:0.1;
+  if((d.slip_rl||0)>_slipAlert||(d.slip_rr||0)>_slipAlert) flash('slip-panel');
 
   // timing
   $('t-cur').textContent=fmt(d.current_lap_time);

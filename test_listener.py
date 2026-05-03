@@ -52,7 +52,7 @@ def build_forza_packet(speed_mph: float = 100.0, throttle_pct: float = 80.0,
         speed_ms, 250000.0, 400.0,   # speed field (m/s) mirrors velocity
         85.0, 85.0, 85.0, 85.0,
         0.5, 0.6, 1500.0,
-        90.234, last_lap, 15.5, 305.0,
+        last_lap if last_lap > 0 else 0.0, last_lap, 15.5, 305.0,
         lap,
         5, accel, 0, 0, 0, 4,
         steer, 0, 0,
