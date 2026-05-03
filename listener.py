@@ -511,7 +511,7 @@ def parse_f1(data: bytes) -> Optional[dict]:
             g_lat  = struct.unpack_from("<f", data, base + 36)[0]
             g_lon  = struct.unpack_from("<f", data, base + 40)[0]
             g_vert = struct.unpack_from("<f", data, base + 44)[0]
-            return {
+            result = {
                 "_packet_type": "motion",
                 "_session_uid": session_uid,
                 "position_x": round(pos_x, 2),
@@ -523,6 +523,34 @@ def parse_f1(data: bytes) -> Optional[dict]:
                 "g_lat":  round(g_lat, 3),
                 "g_lon":  round(g_lon, 3),
                 "g_vert": round(g_vert, 3),
+            }
+            # F1 2023: wheelSlip appended at end of Motion packet after all 22 cars
+            # layout at tail: suspPos(4f) suspVel(4f) suspAcc(4f) wheelSpeed(4f) wheelSlip(4f) ...
+            if not is_2024:
+                slip_base = hdr + 22 * car_size + 64  # 64 = 4×4f before wheelSlip
+                if len(data) >= slip_base + 16:
+                    s_fl, s_fr, s_rl, s_rr = struct.unpack_from("<ffff", data, slip_base)
+                    result["slip_ratio_fl"] = round(abs(s_fl), 4)
+                    result["slip_ratio_fr"] = round(abs(s_fr), 4)
+                    result["slip_ratio_rl"] = round(abs(s_rl), 4)
+                    result["slip_ratio_rr"] = round(abs(s_rr), 4)
+            return result
+
+        if packet_id == 13:
+            # MotionEx (F1 2024 only) — per-player extra motion including wheelSlip
+            # layout: suspPos(4f) suspVel(4f) suspAcc(4f) wheelSpeed(4f) wheelSlip(4f) ...
+            # wheelSlip order: FL=0, FR=1, RL=2, RR=3
+            slip_base = hdr + 64  # 4 × 16 bytes before wheelSlip
+            if len(data) < slip_base + 16:
+                return None
+            s_fl, s_fr, s_rl, s_rr = struct.unpack_from("<ffff", data, slip_base)
+            return {
+                "_packet_type":  "motion",
+                "_session_uid":  session_uid,
+                "slip_ratio_fl": round(abs(s_fl), 4),
+                "slip_ratio_fr": round(abs(s_fr), 4),
+                "slip_ratio_rl": round(abs(s_rl), 4),
+                "slip_ratio_rr": round(abs(s_rr), 4),
             }
 
         if packet_id == 6:
@@ -1047,6 +1075,11 @@ class TelemetryProtocol(asyncio.DatagramProtocol):
                     session._race_positions.append(rp)
             update_state(self.game, session, parsed)
             return  # don't record idle packets as lap samples
+
+        # Pre-merge F1 lap cache so update_state sees current_lap_time / last_lap_time
+        if session._lap_cache and parsed.get("_packet_type") == "telemetry":
+            parsed = {**session._lap_cache, **parsed}
+            session._lap_cache = {}
 
         session.ingest(data, parsed)
         update_state(self.game, session, parsed)
