@@ -14,6 +14,7 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+from typing import Optional
 
 VIEWPORTS = {
     "desktop": {"width": 1440, "height": 900},
@@ -32,7 +33,7 @@ def wait_for_app(base_url: str, retries: int = 20, delay: float = 0.5):
             time.sleep(delay)
 
 
-def get_best_session_id(base_url: str) -> str | None:
+def get_best_session_id(base_url: str) -> Optional[str]:
     """Return session_id of the session with the lowest best_lap_time_s."""
     try:
         with urllib.request.urlopen(f"{base_url}/sessions/data", timeout=5) as r:
